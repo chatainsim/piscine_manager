@@ -1,0 +1,436 @@
+/* ── Variables ─────────────────────────────────────────────────────────────── */
+:root {
+  --blue-deep:   #023e8a;
+  --blue-mid:    #0077b6;
+  --blue-light:  #00b4d8;
+  --blue-pale:   #caf0f8;
+  --green-ok:    #2dc653;
+  --yellow-warn: #f5a623;
+  --red-bad:     #e63946;
+  --text-dark:   #1b2230;
+  --text-muted:  #6c757d;
+  --card-bg:     #ffffff;
+  --body-bg:     #f0f8ff;
+}
+
+/* ── Base ──────────────────────────────────────────────────────────────────── */
+body {
+  background-color: var(--body-bg);
+  color: var(--text-dark);
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Navbar ────────────────────────────────────────────────────────────────── */
+.navbar {
+  background: linear-gradient(135deg, var(--blue-deep) 0%, var(--blue-mid) 100%);
+  box-shadow: 0 2px 12px rgba(0,0,0,0.2);
+  padding: 0.75rem 0;
+}
+.navbar-brand {
+  font-size: 1.4rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.nav-link { opacity: 0.85; transition: opacity 0.2s; }
+.nav-link:hover, .nav-link.active { opacity: 1; }
+
+/* ── Wave decoration ───────────────────────────────────────────────────────── */
+.wave-wrap {
+  background: linear-gradient(135deg, var(--blue-deep) 0%, var(--blue-mid) 100%);
+  overflow: hidden;
+  height: 60px;
+  margin-top: -1px;
+}
+.wave-wrap svg { display: block; width: 100%; height: 60px; }
+
+/* ── Page header ───────────────────────────────────────────────────────────── */
+.page-header {
+  margin-bottom: 1.5rem;
+}
+.page-header h1 { font-size: 1.6rem; font-weight: 700; color: var(--blue-deep); }
+.page-header p   { color: var(--text-muted); margin: 0; }
+
+/* ── Status cards ──────────────────────────────────────────────────────────── */
+.param-card {
+  border: none;
+  border-radius: 16px;
+  box-shadow: 0 2px 12px rgba(0,119,182,0.10);
+  transition: transform 0.2s, box-shadow 0.2s;
+  overflow: hidden;
+}
+.param-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 6px 20px rgba(0,119,182,0.18);
+}
+.param-card .card-header {
+  background: linear-gradient(135deg, var(--blue-mid), var(--blue-light));
+  color: #fff;
+  font-weight: 600;
+  font-size: 0.9rem;
+  padding: 0.6rem 1rem;
+  border: none;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.param-card .card-body {
+  padding: 1.2rem;
+  text-align: center;
+}
+.param-value {
+  font-size: 2.4rem;
+  font-weight: 800;
+  line-height: 1;
+  margin-bottom: 0.3rem;
+}
+.param-unit  { font-size: 0.85rem; color: var(--text-muted); }
+.param-range { font-size: 0.78rem; color: var(--text-muted); margin-top: 0.5rem; }
+
+/* status colours */
+.status-ok   .param-value { color: var(--green-ok);    }
+.status-low  .param-value { color: var(--yellow-warn);  }
+.status-high .param-value { color: var(--red-bad);      }
+.status-none .param-value { color: #bbb; }
+
+.status-badge {
+  display: inline-block;
+  padding: 0.2em 0.7em;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  margin-top: 0.4rem;
+}
+.badge-ok   { background: #d4f5dd; color: #1a7f3c; }
+.badge-low  { background: #fff3cd; color: #856404; }
+.badge-high { background: #fde8ea; color: #c0392b; }
+.badge-none { background: #e9ecef; color: #6c757d; }
+
+/* ── Measurement form card ─────────────────────────────────────────────────── */
+.form-card {
+  border: none;
+  border-radius: 16px;
+  box-shadow: 0 2px 12px rgba(0,119,182,0.10);
+}
+.form-card .card-header {
+  background: linear-gradient(135deg, var(--blue-deep), var(--blue-mid));
+  color: #fff;
+  font-weight: 700;
+  border-radius: 16px 16px 0 0 !important;
+  padding: 0.9rem 1.4rem;
+  border: none;
+}
+.form-control:focus, .form-select:focus {
+  border-color: var(--blue-light);
+  box-shadow: 0 0 0 0.2rem rgba(0,180,216,0.25);
+}
+.btn-pool {
+  background: linear-gradient(135deg, var(--blue-mid), var(--blue-light));
+  color: #fff;
+  border: none;
+  font-weight: 600;
+  border-radius: 8px;
+  padding: 0.5rem 1.5rem;
+  transition: opacity 0.2s, transform 0.1s;
+}
+.btn-pool:hover  { opacity: 0.9; color: #fff; transform: translateY(-1px); }
+.btn-pool:active { transform: translateY(0); }
+
+/* ── Recommendations ───────────────────────────────────────────────────────── */
+.rec-card {
+  border-left: 5px solid var(--blue-light);
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+  margin-bottom: 1rem;
+  overflow: hidden;
+}
+.rec-card.rec-low  { border-left-color: var(--yellow-warn); }
+.rec-card.rec-high { border-left-color: var(--red-bad); }
+.rec-card.rec-ok   { border-left-color: var(--green-ok); }
+
+.rec-card .rec-header {
+  padding: 0.75rem 1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-weight: 600;
+}
+.rec-card.rec-low  .rec-header { background: #fffbe6; color: #856404; }
+.rec-card.rec-high .rec-header { background: #fdf0f0; color: #c0392b; }
+.rec-card .rec-body { padding: 0.75rem 1rem; font-size: 0.9rem; }
+
+.rec-dose {
+  display: inline-block;
+  background: var(--blue-pale);
+  color: var(--blue-deep);
+  border-radius: 8px;
+  padding: 0.2rem 0.75rem;
+  font-weight: 700;
+  font-size: 1rem;
+  margin-right: 0.4rem;
+}
+
+.all-good {
+  background: #d4f5dd;
+  border-radius: 12px;
+  padding: 1rem 1.25rem;
+  color: #1a7f3c;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+/* ── History table ─────────────────────────────────────────────────────────── */
+.table-pool thead {
+  background: linear-gradient(135deg, var(--blue-deep), var(--blue-mid));
+  color: #fff;
+}
+.table-pool thead th { font-weight: 600; border: none; }
+.table-pool tbody tr:hover { background: var(--blue-pale); }
+
+/* ── Charts ────────────────────────────────────────────────────────────────── */
+.chart-card {
+  border: none;
+  border-radius: 16px;
+  box-shadow: 0 2px 12px rgba(0,119,182,0.10);
+  overflow: hidden;
+  margin-bottom: 1.5rem;
+}
+.chart-card .card-header {
+  background: linear-gradient(135deg, var(--blue-mid), var(--blue-light));
+  color: #fff;
+  font-weight: 600;
+  border: none;
+  padding: 0.7rem 1.2rem;
+}
+.chart-card .card-body {
+  position: relative;
+  height: 240px;
+}
+@media (max-width: 576px) {
+  .chart-card .card-body { height: 200px; }
+}
+
+/* ── Settings ──────────────────────────────────────────────────────────────── */
+.settings-section {
+  background: #fff;
+  border-radius: 16px;
+  box-shadow: 0 2px 12px rgba(0,119,182,0.08);
+  padding: 1.5rem;
+  margin-bottom: 1.5rem;
+}
+.settings-section h5 {
+  font-weight: 700;
+  color: var(--blue-deep);
+  margin-bottom: 1.2rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 2px solid var(--blue-pale);
+}
+
+/* ── Footer ────────────────────────────────────────────────────────────────── */
+.footer {
+  background: linear-gradient(135deg, var(--blue-deep), var(--blue-mid));
+  color: rgba(255,255,255,0.8);
+  font-size: 0.85rem;
+  margin-top: auto;
+}
+
+/* ── Treatment cards ───────────────────────────────────────────────────────── */
+.treatment-card {
+  border-radius: 12px;
+  padding: 0.75rem 1rem;
+  border-left: 4px solid;
+}
+.treatment-waiting {
+  background: #fffbe6;
+  border-left-color: var(--yellow-warn);
+}
+.treatment-ready {
+  background: #d4f5dd;
+  border-left-color: var(--green-ok);
+}
+.treatment-icon { font-size: 1.4rem; flex: 0 0 auto; }
+
+/* ── Calculator cards ──────────────────────────────────────────────────────── */
+.calc-card {
+  border: none;
+  border-radius: 16px;
+  box-shadow: 0 2px 12px rgba(0,119,182,0.10);
+  overflow: hidden;
+  transition: box-shadow 0.2s;
+}
+.calc-card:hover { box-shadow: 0 6px 20px rgba(0,119,182,0.18); }
+.calc-card .card-header {
+  background: linear-gradient(135deg, var(--blue-mid), var(--blue-light));
+  color: #fff;
+  font-weight: 600;
+  border: none;
+  padding: 0.65rem 1rem;
+  font-size: 0.95rem;
+}
+.calc-arrow { font-style: normal; transition: color 0.2s; }
+
+.btn-ideal {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 0.72rem;
+  color: var(--blue-mid);
+  cursor: pointer;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.btn-ideal:hover { color: var(--blue-deep); text-decoration: underline; }
+
+.result-box {
+  background: linear-gradient(135deg, var(--blue-pale), #e0f5ff);
+  border-left: 4px solid var(--blue-mid);
+  border-radius: 10px;
+}
+
+.product-phrase .form-control,
+.product-phrase .form-select { display: inline-block !important; vertical-align: middle; }
+.phrase-select { padding-right: 1.5rem !important; }
+
+/* ── Utilities ─────────────────────────────────────────────────────────────── */
+.text-blue-deep { color: var(--blue-deep); }
+.divider { border-color: var(--blue-pale); }
+.val-ok   { color: var(--green-ok); }
+.val-low  { color: var(--yellow-warn); }
+.val-high { color: var(--red-bad); }
+.val-none { color: var(--text-muted); }
+
+/* ── Classes utilitaires thémables ─────────────────────────────────────────── */
+
+/* Blocs <pre> / code à copier */
+.code-block {
+  background: #f8f9fa;
+  color: var(--text-dark);
+  border-radius: 6px;
+}
+
+/* Inputs en lecture seule (tokens) */
+.input-readonly {
+  background: #f8f9fa !important;
+  color: var(--text-muted) !important;
+}
+
+/* Zones colorées (export / import / phrase produit) */
+.zone-export {
+  background: #f0f8ff;
+  border: 1px solid #caf0f8;
+}
+.zone-import {
+  background: #fff8f0;
+  border: 1px solid #fde8c8;
+}
+.zone-phrase {
+  background: #f0f8ff;
+  border: 1px solid #caf0f8;
+}
+
+/* En-tête de carte neutre */
+.card-header-light {
+  background: #f8f9fa;
+  border-bottom: 1px solid #dee2e6;
+}
+
+/* Cellules avant/après dans l'historique */
+.cell-measure {
+  background: #f0f8ff;
+}
+
+/* Boîte hint calculateur */
+.hint-box {
+  background: #f8f9fa;
+}
+
+/* ── Dark mode (Feature 17) ─────────────────────────────────────────────────── */
+[data-bs-theme="dark"] {
+  --body-bg:   #0d1117;
+  --card-bg:   #161b22;
+  --text-dark: #e6edf3;
+  --text-muted:#8b949e;
+  --blue-pale: #1c2d3f;
+  --blue-deep: #60a5fa;
+  --blue-mid:  #3b82f6;
+  --blue-light:#93c5fd;
+}
+
+[data-bs-theme="dark"] body         { background-color: var(--body-bg); }
+[data-bs-theme="dark"] .wave-wrap   { background: linear-gradient(135deg, #023e8a 0%, #0077b6 100%); }
+
+/* Custom card-like containers */
+[data-bs-theme="dark"] .settings-section { background: var(--card-bg); }
+[data-bs-theme="dark"] .all-good         { background: #0f2a1a; color: #6ee7a0; }
+
+/* Rec cards */
+[data-bs-theme="dark"] .rec-card              { background: var(--card-bg); }
+[data-bs-theme="dark"] .rec-card.rec-low  .rec-header { background: #2a2010; color: #fcd34d; }
+[data-bs-theme="dark"] .rec-card.rec-high .rec-header { background: #2a1010; color: #fca5a5; }
+
+/* Treatment cards */
+[data-bs-theme="dark"] .treatment-waiting { background: #2a2010; }
+[data-bs-theme="dark"] .treatment-ready   { background: #0f2a1a; }
+
+/* Calculator result */
+[data-bs-theme="dark"] .result-box {
+  background: linear-gradient(135deg, #1c2d3f, #1a3050);
+  border-left-color: var(--blue-mid);
+}
+
+/* Product phrase */
+[data-bs-theme="dark"] .product-phrase {
+  background: #1c2d3f !important;
+  border-color: #264d6e !important;
+}
+
+/* Reminder info box */
+[data-bs-theme="dark"] .mt-3.p-3.rounded[style*="background:#e8f4fd"] {
+  background: #1c2d3f !important;
+  color: #93c5fd !important;
+}
+
+/* Classes utilitaires */
+[data-bs-theme="dark"] .code-block       { background: #161b22; color: #e6edf3; }
+[data-bs-theme="dark"] .input-readonly   { background: #21262d !important; color: var(--text-muted) !important; border-color: #30363d !important; }
+[data-bs-theme="dark"] .zone-export      { background: #1c2d3f; border-color: #264d6e; }
+[data-bs-theme="dark"] .zone-import      { background: #2a1f0f; border-color: #5a3a1a; }
+[data-bs-theme="dark"] .zone-phrase      { background: #1c2d3f; border-color: #264d6e; }
+[data-bs-theme="dark"] .card-header-light{ background: #21262d; border-color: #30363d; color: var(--text-muted); }
+[data-bs-theme="dark"] .cell-measure     { background: #1c2d3f; }
+[data-bs-theme="dark"] .hint-box         { background: #21262d; color: var(--text-muted); }
+
+/* Inputs Bootstrap en dark mode */
+[data-bs-theme="dark"] .form-control,
+[data-bs-theme="dark"] .form-select      { background-color: #21262d; color: var(--text-dark); border-color: #30363d; }
+[data-bs-theme="dark"] .form-control::placeholder { color: #6e7681; }
+[data-bs-theme="dark"] .form-control:focus,
+[data-bs-theme="dark"] .form-select:focus { background-color: #21262d; color: var(--text-dark); border-color: var(--blue-mid); box-shadow: 0 0 0 0.2rem rgba(59,130,246,0.25); }
+[data-bs-theme="dark"] .input-group-text { background-color: #30363d; color: var(--text-muted); border-color: #30363d; }
+
+/* Alertes en dark mode */
+[data-bs-theme="dark"] .alert-info    { background-color: #1c2d3f; border-color: #264d6e; color: #93c5fd; }
+[data-bs-theme="dark"] .alert-warning { background-color: #2a2010; border-color: #5a4010; color: #fcd34d; }
+[data-bs-theme="dark"] .alert-secondary { background-color: #21262d; border-color: #30363d; color: var(--text-muted); }
+
+/* Tableaux */
+[data-bs-theme="dark"] .table         { color: var(--text-dark); }
+[data-bs-theme="dark"] .table-light   { --bs-table-bg: #21262d; color: var(--text-muted); }
+[data-bs-theme="dark"] .table-bordered { border-color: #30363d; }
+[data-bs-theme="dark"] .table-bordered td,
+[data-bs-theme="dark"] .table-bordered th { border-color: #30363d; }
+[data-bs-theme="dark"] .table-success { --bs-table-bg: #0f2a1a; color: #6ee7a0; }
+[data-bs-theme="dark"] .table-hover > tbody > tr:hover > * { background-color: #1c2d3f; }
+
+/* Modales */
+[data-bs-theme="dark"] .modal-content  { background-color: var(--card-bg); color: var(--text-dark); }
+[data-bs-theme="dark"] .modal-footer   { border-color: #30363d; }
+
+/* Dark mode toggle button */
+#theme-toggle { background: none; border: none; font-size: 1.2rem; line-height: 1; cursor: pointer; opacity: 0.85; transition: opacity 0.2s; }
+#theme-toggle:hover { opacity: 1; }
