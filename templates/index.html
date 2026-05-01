@@ -1,0 +1,518 @@
+{% extends "base.html" %}
+{% block title %}Tableau de bord – Piscine Manager{% endblock %}
+
+{% block content %}
+
+<!-- ── Header ─────────────────────────────────────────────────────────────── -->
+<div class="page-header d-flex align-items-center justify-content-between flex-wrap gap-2">
+  <div>
+    <h1>🏊 Tableau de bord</h1>
+    <p class="d-flex align-items-center gap-3 flex-wrap">
+      {% if last %}
+        Dernier test : <strong>{{ last.measured_at[:16].replace('T',' ') }}</strong>
+        {% if last_ago %}
+        <span class="badge rounded-pill ms-1 {% if last_is_old %}bg-danger{% else %}bg-secondary{% endif %}"
+              style="font-size:0.78rem; font-weight:500;">
+          {{ last_ago }}
+        </span>
+        {% endif %}
+      {% else %}
+        Aucune mesure enregistrée. Ajoutez votre premier test ci-dessous.
+      {% endif %}
+      {% if latest_temp %}
+        <span class="badge rounded-pill" style="background:var(--blue-light); color:var(--blue-deep); font-size:0.9rem; padding:0.4em 0.8em;">
+          🌡️ {{ latest_temp.temperature }}°C
+          <span class="fw-normal opacity-75 ms-1" style="font-size:0.78rem;">
+            ({{ latest_temp.recorded_at[:16].replace('T',' ') }})
+          </span>
+        </span>
+      {% endif %}
+    </p>
+  </div>
+  <a href="{{ url_for('history') }}" class="btn btn-outline-primary btn-sm">
+    📈 Voir l'historique
+  </a>
+</div>
+
+<!-- ── Status cards ────────────────────────────────────────────────────────── -->
+<div class="d-flex align-items-center justify-content-end mb-2 gap-2">
+  <span class="text-muted small">Tendance :</span>
+  <div class="btn-group btn-group-sm" role="group" aria-label="Fenêtre sparklines">
+    {% for days, label in [(7,'7 j'), (14,'14 j'), (30,'30 j')] %}
+    <a href="{{ url_for('index', spark=days) }}"
+       class="btn {{ 'btn-primary' if spark_days == days else 'btn-outline-primary' }}">{{ label }}</a>
+    {% endfor %}
+  </div>
+</div>
+<div class="row g-3 mb-4">
+
+  {% set params = [
+    ('ph',         '💧', 'pH',            ''),
+    ('bromine',    '🧪', 'Brome',         ' ppm'),
+    ('hardness',   '🪨', 'Dureté (TH)',   ' ppm'),
+    ('alkalinity', '⚗️', 'Alcalinité (TAC)',' ppm'),
+  ] %}
+
+  {% for key, icon, label, unit in params %}
+  {% set status = statuses.get(key, 'none') %}
+  {% set value  = last[key] if last and last[key] is not none else none %}
+  <div class="col-12 col-sm-6 col-xl-3">
+    <div class="card param-card h-100 status-{{ status }}">
+      <div class="card-header">{{ icon }} {{ label }}</div>
+      <div class="card-body">
+        <div class="param-value">
+          {% if value is not none %}{{ value }}{% else %}–{% endif %}
+        </div>
+        <div class="param-unit">{{ unit.strip() or 'sans unité' }}</div>
+        <div>
+          {% if status == 'ok' %}
+            <span class="status-badge badge-ok">✅ Normal</span>
+          {% elif status == 'low' %}
+            <span class="status-badge badge-low">⬇️ Trop bas</span>
+          {% elif status == 'high' %}
+            <span class="status-badge badge-high">⬆️ Trop haut</span>
+          {% else %}
+            <span class="status-badge badge-none">— Pas de données</span>
+          {% endif %}
+        </div>
+        {% set delta = deltas.get(key) %}
+        {% if delta is not none %}
+          {% if delta > 0 %}
+            <div class="small mt-1" style="color:#2dc653;">▲ +{{ delta }}{{ unit }}</div>
+          {% elif delta < 0 %}
+            <div class="small mt-1" style="color:#e63946;">▼ {{ delta }}{{ unit }}</div>
+          {% else %}
+            <div class="small mt-1 text-muted">→ stable</div>
+          {% endif %}
+        {% endif %}
+        <div class="param-range">
+          Idéal : {{ ideal[key].min }} – {{ ideal[key].max }}{{ unit }}
+        </div>
+        <div class="mt-2" style="height:44px;">
+          <canvas id="spark-{{ key }}" height="44" aria-hidden="true"></canvas>
+        </div>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+
+</div>
+
+<div class="row g-4">
+
+  <!-- ── Add measurement form ──────────────────────────────────────────────── -->
+  <div class="col-lg-5">
+    <div class="card form-card">
+      <div class="card-header">➕ Nouvelle mesure</div>
+      <div class="card-body p-4">
+        <form action="{{ url_for('add_measurement') }}" method="post" enctype="multipart/form-data">
+
+          <div class="mb-3">
+            <label class="form-label fw-semibold" for="f-measured_at">📅 Date et heure</label>
+            <input type="datetime-local" class="form-control" name="measured_at" id="f-measured_at"
+                   value="{{ now }}" required>
+          </div>
+
+          <div class="row g-3 mb-3">
+            <div class="col-6">
+              <label class="form-label fw-semibold" for="f-ph">💧 pH</label>
+              <input type="number" class="form-control" name="ph" id="f-ph"
+                     step="0.1" min="3" max="12"
+                     placeholder="{{ last.ph if last and last.ph is not none else '7.4' }}">
+              <div class="form-text">Idéal : 7,2 – 7,6{% if last and last.ph is not none %} · dernier : {{ last.ph }}{% endif %}</div>
+            </div>
+            <div class="col-6">
+              <label class="form-label fw-semibold" for="f-bromine">🧪 Brome (ppm)</label>
+              <input type="number" class="form-control" name="bromine" id="f-bromine"
+                     step="0.1" min="0"
+                     placeholder="{{ last.bromine if last and last.bromine is not none else '4' }}">
+              <div class="form-text">Idéal : 3 – 5 ppm{% if last and last.bromine is not none %} · dernier : {{ last.bromine }}{% endif %}</div>
+            </div>
+          </div>
+
+          <div class="row g-3 mb-3">
+            <div class="col-6">
+              <label class="form-label fw-semibold" for="f-hardness">🪨 Dureté TH (ppm)</label>
+              <input type="number" class="form-control" name="hardness" id="f-hardness"
+                     step="1" min="0"
+                     placeholder="{{ last.hardness if last and last.hardness is not none else '300' }}">
+              <div class="form-text">Idéal : 200 – 400 ppm{% if last and last.hardness is not none %} · dernier : {{ last.hardness }}{% endif %}</div>
+            </div>
+            <div class="col-6">
+              <label class="form-label fw-semibold" for="f-alkalinity">⚗️ Alcalinité TAC (ppm)</label>
+              <input type="number" class="form-control" name="alkalinity" id="f-alkalinity"
+                     step="1" min="0"
+                     placeholder="{{ last.alkalinity if last and last.alkalinity is not none else '100' }}">
+              <div class="form-text">Idéal : 80 – 120 ppm{% if last and last.alkalinity is not none %} · dernier : {{ last.alkalinity }}{% endif %}</div>
+            </div>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label fw-semibold" for="f-temperature">🌡️ Température (°C)
+              {% if latest_temp %}
+              <span class="text-muted fw-normal small">— sonde HA : {{ latest_temp.temperature }}°C</span>
+              {% endif %}
+            </label>
+            <input type="number" class="form-control" name="temperature" id="f-temperature"
+                   step="0.01" min="0" max="50"
+                   placeholder="ex: 26.5"
+                   value="{{ latest_temp.temperature if latest_temp else '' }}">
+          </div>
+
+          <div class="mb-4">
+            <label class="form-label fw-semibold" for="f-notes">📝 Notes (optionnel)</label>
+            <textarea class="form-control" name="notes" id="f-notes" rows="2"
+                      placeholder="Ex: après pluie, après choc brome..."></textarea>
+          </div>
+
+          <div class="mb-4">
+            <label class="form-label fw-semibold" for="photo-input">📷 Photo (optionnel)</label>
+            <input type="file" class="form-control" name="photo" id="photo-input"
+                   accept="image/jpeg,image/png,image/webp" capture="environment">
+            <div class="form-text">Photo de la bandelette ou de l'eau (JPEG, PNG, WEBP).</div>
+            <img id="photo-preview" src="" alt="Aperçu"
+                 style="display:none; max-height:120px; margin-top:8px; border-radius:6px; object-fit:cover;">
+          </div>
+
+          <button type="submit" class="btn btn-pool w-100">
+            💾 Enregistrer la mesure
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Recommendations + Treatments ────────────────────────────────────── -->
+  <div class="col-lg-7">
+
+    <!-- Traitements en cours ──────────────────────────────────────────────── -->
+    {% if active_treatments %}
+    <div class="mb-3">
+      <h5 class="text-blue-deep fw-bold">⏳ Traitements en cours</h5>
+      {% for t in active_treatments %}
+      {% set plabel = {'alkalinity':'TAC','ph':'pH','hardness':'TH','bromine':'Brome'} %}
+      <div class="treatment-card {{ 'treatment-ready' if t.can_retest else 'treatment-waiting' }} mb-2">
+        <div class="d-flex align-items-center gap-3">
+          <span class="treatment-icon">{{ '✅' if t.can_retest else '⏳' }}</span>
+          <div class="flex-grow-1">
+            <div class="fw-semibold small">
+              {{ t.product_name }}
+              <span class="text-muted ms-1">
+                ({{ '⬆' if t.direction == 'up' else '⬇' }} {{ plabel.get(t.parameter, t.parameter) }})
+              </span>
+              {% if t.quantity %}
+                <span class="text-muted">— {{ t.quantity }} {{ t.unit }}</span>
+              {% endif %}
+            </div>
+            {% if t.can_retest %}
+            <div class="small text-success fw-semibold">
+              Ajouté il y a {{ t.elapsed_str }} — vous pouvez retester !
+            </div>
+            {% else %}
+            <div class="small">
+              Ajouté il y a <strong>{{ t.elapsed_str }}</strong> —
+              attendre encore <strong class="text-warning">{{ t.remaining_str }}</strong> avant de retester
+            </div>
+            {% endif %}
+            {% set punit = {'alkalinity':' ppm','ph':'','hardness':' ppm','bromine':' ppm'} %}
+            {% if t.before_value is not none %}
+            <div style="font-size:0.78rem; color:var(--text-muted); margin-top:2px;">
+              Avant traitement : <strong>{{ t.before_value }}{{ punit.get(t.parameter,'') }}</strong>
+              {% if t.can_retest %}— retestez pour voir l'évolution{% endif %}
+            </div>
+            {% endif %}
+            {% if t.notes %}<div class="text-muted" style="font-size:0.78rem;">{{ t.notes }}</div>{% endif %}
+          </div>
+          <form action="{{ url_for('delete_treatment', id=t.id) }}" method="post"
+                onsubmit="return confirm('Supprimer ce traitement ?')">
+            <button type="submit" class="btn btn-sm btn-outline-secondary py-0 px-2" title="Supprimer">✕</button>
+          </form>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    <!-- Recommandations ───────────────────────────────────────────────────── -->
+    <div class="page-header">
+      <h5 class="text-blue-deep fw-bold">🔬 Recommandations</h5>
+    </div>
+
+    {% if not last %}
+      <div class="all-good">
+        📋 Ajoutez une mesure pour obtenir des recommandations personnalisées.
+      </div>
+
+    {% elif recommendations %}
+      <p class="text-muted small mb-3">
+        ⚠️ Corriger l'alcalinité (TAC) <strong>avant</strong> d'ajuster le pH.
+        Les dosages sont indicatifs — toujours retester après {{ wait_hours }}h.
+      </p>
+      {% for rec in recommendations %}
+      <div class="rec-card rec-{{ rec.status }}">
+        <div class="rec-header">
+          {{ rec.icon }} {{ rec.param }}
+          <span class="ms-auto text-muted fw-normal small">{{ rec.value }} {{ ideal[rec.key].unit }}</span>
+        </div>
+        <div class="rec-body">
+          <div class="mb-2">
+            <strong>Produit :</strong> {{ rec.product }}&nbsp;&nbsp;
+            <span class="rec-dose">{{ rec.dose }}</span>
+          </div>
+          <div class="text-muted small mb-2">{{ rec.detail }}</div>
+          <button type="button" class="btn btn-sm btn-outline-success btn-log-treatment"
+                  data-product="{{ rec.product }}"
+                  data-param="{{ rec.key }}"
+                  data-direction="{{ 'up' if rec.status == 'low' else 'down' }}">
+            ➕ J'ai ajouté ce produit
+          </button>
+        </div>
+      </div>
+      {% endfor %}
+
+    {% else %}
+      <div class="all-good">
+        ✅ Tous les paramètres sont dans les normes. Votre eau est parfaite !
+      </div>
+    {% endif %}
+
+    <!-- Reminder note -->
+    {% if last %}
+    <div class="mt-3 p-3 rounded" style="background:#e8f4fd; font-size:0.85rem; color:#0077b6;">
+      💡 <strong>Conseil :</strong> Testez votre eau 2 à 3 fois par semaine en saison,
+      surtout après fortes chaleurs, pluie ou utilisation intensive.
+    </div>
+    {% endif %}
+
+    <!-- Formulaire ajout traitement ───────────────────────────────────────── -->
+    <div class="mt-3" id="treatmentForm">
+      <div class="card form-card">
+          <div class="card-header">📋 J'ai ajouté un produit</div>
+          <div class="card-body p-3">
+            <form action="{{ url_for('add_treatment') }}" method="post" id="treatment-form" novalidate>
+              <div class="row g-2 mb-2">
+                <div class="col-12 col-sm-7">
+                  <label class="form-label small fw-semibold">Produit</label>
+                  <input type="text" name="product_name" id="treat-name" class="form-control form-control-sm"
+                         list="treat-datalist" placeholder="Ex: Bicarbonate de sodium" required>
+                  <datalist id="treat-datalist">
+                    {% for p in products %}
+                    <option value="{{ p.name }}"
+                            data-param="{{ p.parameter }}"
+                            data-dir="{{ p.direction }}"
+                            data-unit="{{ p.ref_dose_unit }}">
+                    {% endfor %}
+                  </datalist>
+                </div>
+                <div class="col-6 col-sm-3">
+                  <label class="form-label small fw-semibold">Paramètre</label>
+                  <select name="parameter" id="treat-parameter" class="form-select form-select-sm" required>
+                    <option value="">— paramètre —</option>
+                    <option value="alkalinity">⚗️ TAC</option>
+                    <option value="ph">💧 pH</option>
+                    <option value="hardness">🪨 TH</option>
+                    <option value="bromine">🧪 Brome</option>
+                  </select>
+                </div>
+                <div class="col-6 col-sm-2">
+                  <label class="form-label small fw-semibold">Direction</label>
+                  <select name="direction" id="treat-direction" class="form-select form-select-sm">
+                    <option value="up">⬆ +</option>
+                    <option value="down">⬇ −</option>
+                  </select>
+                </div>
+              </div>
+              <div class="row g-2 mb-2">
+                <div class="col-5">
+                  <label class="form-label small fw-semibold">Quantité ajoutée</label>
+                  <div class="input-group input-group-sm">
+                    <input type="number" name="quantity" id="treat-quantity"
+                           class="form-control" step="0.01" min="0" placeholder="1.8">
+                    <select name="unit" id="treat-unit" class="form-select" style="max-width:65px;">
+                      <option value="kg">kg</option>
+                      <option value="g">g</option>
+                      <option value="L">L</option>
+                      <option value="ml">ml</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="col-7">
+                  <label class="form-label small fw-semibold">Date et heure</label>
+                  <input type="datetime-local" name="added_at" class="form-control form-control-sm"
+                         value="{{ now }}">
+                </div>
+              </div>
+              <div class="mb-2">
+                <label class="form-label small fw-semibold">Notes (optionnel)</label>
+                <input type="text" name="notes" class="form-control form-control-sm"
+                       placeholder="Ex: choc brome, après pluie...">
+              </div>
+              <button type="submit" class="btn btn-pool btn-sm w-100" id="treat-submit-btn">
+                💾 Enregistrer — retester dans <span id="treat-wait-label">{{ wait_hours }}h</span>
+              </button>
+            </form>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- fin col-lg-7 -->
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// ── Sparklines ────────────────────────────────────────────────────────────────
+(function () {
+  const spark = {{ spark | tojson }};
+  if (!spark.length) return;
+
+  const PARAMS = {
+    ph:         { idealMin: {{ ideal.ph.min }},         idealMax: {{ ideal.ph.max }},         color: '#0077b6' },
+    bromine:    { idealMin: {{ ideal.bromine.min }},    idealMax: {{ ideal.bromine.max }},    color: '#2196f3' },
+    hardness:   { idealMin: {{ ideal.hardness.min }},   idealMax: {{ ideal.hardness.max }},   color: '#00b4d8' },
+    alkalinity: { idealMin: {{ ideal.alkalinity.min }}, idealMax: {{ ideal.alkalinity.max }}, color: '#48cae4' },
+  };
+
+  Object.entries(PARAMS).forEach(([key, cfg]) => {
+    const canvas = document.getElementById('spark-' + key);
+    if (!canvas) return;
+    const values = spark.map(m => m[key]);
+    if (values.every(v => v === null)) return;
+
+    // Zone idéale en bande de fond
+    const isDark = document.documentElement.getAttribute('data-bs-theme') === 'dark';
+    const zoneColor = isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,180,100,0.10)';
+
+    new Chart(canvas, {
+      type: 'line',
+      data: {
+        labels: spark.map(m => m.measured_at.slice(0, 10)),
+        datasets: [{
+          data: values,
+          borderColor: cfg.color,
+          borderWidth: 1.5,
+          pointRadius: 0,
+          pointHoverRadius: 3,
+          tension: 0.35,
+          fill: false,
+          spanGaps: true,
+        }],
+      },
+      options: {
+        animation: false,
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: { title: () => '' },
+            displayColors: false,
+            padding: 4,
+          },
+        },
+        scales: {
+          x: { display: false },
+          y: {
+            display: false,
+            suggestedMin: cfg.idealMin * 0.85,
+            suggestedMax: cfg.idealMax * 1.15,
+          },
+        },
+      },
+      plugins: [{
+        id: 'sparkZone',
+        beforeDatasetsDraw(chart) {
+          const { ctx, chartArea: a, scales: { y } } = chart;
+          if (!a) return;
+          const yTop    = Math.max(y.getPixelForValue(cfg.idealMax), a.top);
+          const yBottom = Math.min(y.getPixelForValue(cfg.idealMin), a.bottom);
+          if (yBottom <= yTop) return;
+          ctx.save();
+          ctx.fillStyle = zoneColor;
+          ctx.fillRect(a.left, yTop, a.width, yBottom - yTop);
+          ctx.restore();
+        },
+      }],
+    });
+  });
+})();
+
+const PRODUCTS_DATA = {{ products | tojson }};
+
+// ── Auto-remplissage via datalist ─────────────────────────────────────────────
+document.getElementById('treat-name')?.addEventListener('change', function () {
+  const prod = PRODUCTS_DATA.find(p => p.name === this.value);
+  if (!prod) return;
+  document.getElementById('treat-parameter').value = prod.parameter;
+  document.getElementById('treat-direction').value  = prod.direction;
+  document.getElementById('treat-unit').value        = prod.ref_dose_unit;
+  const q = document.getElementById('treat-quantity');
+  if (!q.value) q.placeholder = prod.ref_dose;
+  // Mise à jour du délai d'attente affiché sur le bouton
+  const wl = document.getElementById('treat-wait-label');
+  if (wl && prod.wait_hours) {
+    const h = prod.wait_hours;
+    wl.textContent = h < 1 ? `${Math.round(h * 60)} min` : `${h}h`;
+  }
+});
+
+// ── Aperçu photo avant upload ─────────────────────────────────────────────────
+document.getElementById('photo-input')?.addEventListener('change', function () {
+  const preview = document.getElementById('photo-preview');
+  if (this.files && this.files[0]) {
+    const reader = new FileReader();
+    reader.onload = e => { preview.src = e.target.result; preview.style.display = 'block'; };
+    reader.readAsDataURL(this.files[0]);
+  } else {
+    preview.src = '';
+    preview.style.display = 'none';
+  }
+});
+
+// ── Validation formulaire traitement ──────────────────────────────────────────
+(function () {
+  const form  = document.getElementById('treatment-form');
+  const name  = document.getElementById('treat-name');
+  const param = document.getElementById('treat-parameter');
+
+  function showError(el, msg) {
+    el.classList.add('is-invalid');
+    let fb = el.parentElement.querySelector('.invalid-feedback');
+    if (!fb) { fb = document.createElement('div'); fb.className = 'invalid-feedback'; el.after(fb); }
+    fb.textContent = msg;
+  }
+  function clearError(el) { el.classList.remove('is-invalid'); }
+
+  name.addEventListener('input',  () => clearError(name));
+  param.addEventListener('change', () => clearError(param));
+
+  form.addEventListener('submit', function (e) {
+    let ok = true;
+    if (!name.value.trim()) { showError(name, 'Le nom du produit est requis.'); ok = false; }
+    if (!param.value)        { showError(param, 'Sélectionnez un paramètre.');   ok = false; }
+    if (!ok) { e.preventDefault(); name.value.trim() ? param.focus() : name.focus(); }
+  });
+})();
+
+// ── Bouton "J'ai ajouté ce produit" depuis une reco ──────────────────────────
+document.querySelectorAll('.btn-log-treatment').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.getElementById('treat-name').value       = btn.dataset.product;
+    document.getElementById('treat-parameter').value  = btn.dataset.param;
+    document.getElementById('treat-direction').value  = btn.dataset.direction;
+
+    const prod = PRODUCTS_DATA.find(p => p.name === btn.dataset.product);
+    if (prod) {
+      document.getElementById('treat-unit').value = prod.ref_dose_unit;
+      const q = document.getElementById('treat-quantity');
+      if (!q.value) q.placeholder = prod.ref_dose;
+    }
+
+    document.getElementById('treatmentForm').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    document.getElementById('treat-name').focus();
+  });
+});
+</script>
+{% endblock %}

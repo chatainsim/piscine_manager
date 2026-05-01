@@ -1,0 +1,907 @@
+{% extends "base.html" %}
+{% block title %}Historique – Piscine Manager{% endblock %}
+
+{% block content %}
+
+<div class="page-header d-flex align-items-center justify-content-between flex-wrap gap-2">
+  <div>
+    <h1>📈 Historique des mesures</h1>
+    <p>
+      {{ total_count }} mesure(s)
+      {% if period %}sur les {{ period }} derniers jours
+      {% elif from_date or to_date %}sur la période sélectionnée
+      {% endif %}
+    </p>
+  </div>
+  <a href="{{ url_for('index') }}" class="btn btn-outline-primary btn-sm">
+    ← Tableau de bord
+  </a>
+</div>
+
+<!-- ── Filtre + export ─────────────────────────────────────────────────────── -->
+<div class="card mb-4" style="border:none; border-radius:12px; box-shadow:0 2px 8px rgba(0,119,182,0.08);">
+  <div class="card-body py-3">
+    <form method="get" action="{{ url_for('history') }}"
+          class="d-flex flex-wrap align-items-end gap-3">
+
+      <!-- Boutons période rapide -->
+      <div>
+        <div class="form-label small fw-semibold mb-1">Période</div>
+        <div class="btn-group btn-group-sm" role="group">
+          {% for p, label in [('7','7 j'), ('30','30 j'), ('90','3 mois')] %}
+          <a href="{{ url_for('history', period=p) }}"
+             class="btn {{ 'btn-primary' if period == p else 'btn-outline-primary' }}">{{ label }}</a>
+          {% endfor %}
+          <a href="{{ url_for('history') }}"
+             class="btn {{ 'btn-primary' if not period and not from_date and not to_date else 'btn-outline-primary' }}">Tout</a>
+        </div>
+      </div>
+
+      <!-- Plage personnalisée -->
+      <div class="d-flex align-items-end gap-2">
+        <div>
+          <label class="form-label small fw-semibold mb-1">Du</label>
+          <input type="date" name="from_date" class="form-control form-control-sm"
+                 value="{{ from_date }}" style="width:145px;">
+        </div>
+        <div>
+          <label class="form-label small fw-semibold mb-1">Au</label>
+          <input type="date" name="to_date" class="form-control form-control-sm"
+                 value="{{ to_date }}" style="width:145px;">
+        </div>
+        <button type="submit" class="btn btn-sm btn-pool">Filtrer</button>
+      </div>
+
+      <!-- Lignes par page -->
+      <div>
+        <div class="form-label small fw-semibold mb-1">Lignes</div>
+        <select name="limit" class="form-select form-select-sm" style="width:90px;"
+                onchange="this.form.submit()">
+          {% for val, lbl in [(100,'100'), (200,'200'), (500,'500'), (2000,'Tout')] %}
+          <option value="{{ val }}" {% if table_limit == val %}selected{% endif %}>{{ lbl }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <!-- Filtre hors norme -->
+      <div>
+        <div class="form-label small fw-semibold mb-1 invisible">.</div>
+        <button type="button" class="btn btn-sm btn-outline-warning" id="btn-filter-issues"
+                title="Afficher uniquement les lignes avec des valeurs hors norme">
+          ⚠️ Hors norme
+        </button>
+      </div>
+
+      <!-- Export CSV -->
+      <div class="ms-auto">
+        <a href="{{ url_for('export_csv', period=period, from_date=from_date, to_date=to_date) }}"
+           class="btn btn-sm btn-outline-success">
+          📥 Export CSV
+        </a>
+      </div>
+
+      <!-- Purge -->
+      <div>
+        <button type="button" class="btn btn-sm btn-outline-danger"
+                data-bs-toggle="modal" data-bs-target="#purgeModal" title="Supprimer les anciennes mesures">
+          🗑️ Purger
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- ── Charts ──────────────────────────────────────────────────────────────── -->
+<div class="row g-4 mb-4">
+
+  {% set charts = [
+    ('chart-ph',         'pH',              '💧 pH',            '#0077b6', ideal.ph.min,         ideal.ph.max),
+    ('chart-bromine',    'chart_bromine',   '🧪 Brome (ppm)',   '#2196f3', ideal.bromine.min,    ideal.bromine.max),
+    ('chart-hardness',   'chart_hardness',  '🪨 Dureté (ppm)',  '#00b4d8', ideal.hardness.min,   ideal.hardness.max),
+    ('chart-alkalinity', 'chart_alkalinity','⚗️ Alcalinité (ppm)','#023e8a',ideal.alkalinity.min,ideal.alkalinity.max),
+  ] %}
+
+  <div class="col-md-6">
+    <div class="card chart-card">
+      <div class="card-header">💧 pH</div>
+      <div class="card-body"><canvas id="chart-ph"></canvas></div>
+    </div>
+  </div>
+  <div class="col-md-6">
+    <div class="card chart-card">
+      <div class="card-header">🧪 Brome (ppm)</div>
+      <div class="card-body"><canvas id="chart-bromine"></canvas></div>
+    </div>
+  </div>
+  <div class="col-md-6">
+    <div class="card chart-card">
+      <div class="card-header">🪨 Dureté TH (ppm)</div>
+      <div class="card-body"><canvas id="chart-hardness"></canvas></div>
+    </div>
+  </div>
+  <div class="col-md-6">
+    <div class="card chart-card">
+      <div class="card-header">⚗️ Alcalinité TAC (ppm)</div>
+      <div class="card-body"><canvas id="chart-alkalinity"></canvas></div>
+    </div>
+  </div>
+  <div class="col-md-6">
+    <div class="card chart-card">
+      <div class="card-header d-flex align-items-center gap-2">
+        🌡️ Température °C
+        <span class="ms-auto badge bg-light text-secondary fw-normal" style="font-size:0.75rem;">
+          {{ temp_count }} point{% if temp_count > 1 %}s{% endif %} Home Assistant
+        </span>
+      </div>
+      <div class="card-body">
+        {% if temp_count > 0 %}
+          <canvas id="chart-temperature"></canvas>
+        {% else %}
+          <div class="text-muted small text-center py-4">
+            Aucune donnée de température reçue depuis Home Assistant.<br>
+            <a href="{{ url_for('settings_page') }}#ha">Configurer l'intégration →</a>
+          </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- ── Bilan des traitements ─────────────────────────────────────────────────── -->
+{% if correlations %}
+{% set outcome_cfg = {
+  'corrected':    ('✅', 'Corrigé',       'bg-success',     'text-white'),
+  'improved':     ('↗️', 'Amélioré',      'bg-warning',     'text-dark'),
+  'overcorrected':('⚠️', 'Dépassé',       'bg-danger',      'text-white'),
+  'unchanged':    ('↔️', 'Inchangé',      'bg-secondary',   'text-white'),
+  'pending':      ('⏳', 'En attente',    'bg-info',        'text-white'),
+  'no_retest':    ('📋', 'Non retesté',   'bg-light border','text-secondary'),
+  'no_baseline':  ('—',  'Sans référence','bg-light border','text-secondary'),
+} %}
+{% set punit = {'alkalinity':' ppm','ph':'','hardness':' ppm','bromine':' ppm'} %}
+{% set plabel = {'alkalinity':'TAC','ph':'pH','hardness':'TH','bromine':'Brome'} %}
+
+<div class="mb-4">
+  <h5 class="text-blue-deep fw-bold mb-3">📊 Bilan des traitements</h5>
+  <div class="row g-3">
+  {% for t in correlations %}
+  {% set cfg = outcome_cfg.get(t.outcome, outcome_cfg['no_baseline']) %}
+  <div class="col-md-6 col-xl-4">
+    <div class="card h-100" style="border:none; border-radius:12px;
+         box-shadow:0 2px 8px rgba(0,119,182,0.09); overflow:hidden;">
+
+      <!-- En-tête -->
+      <div class="d-flex align-items-center px-3 py-2 gap-2"
+           style="background:linear-gradient(135deg,var(--blue-mid),var(--blue-light)); color:#fff;">
+        <span class="fw-semibold small flex-grow-1">
+          {{ t.product_name }}
+          <span class="opacity-75 ms-1">
+            ({{ '⬆' if t.direction == 'up' else '⬇' }} {{ plabel.get(t.parameter, t.parameter) }})
+          </span>
+        </span>
+        <span class="badge {{ cfg[2] }} {{ cfg[3] }}" style="font-size:0.7rem;">
+          {{ cfg[0] }} {{ cfg[1] }}
+        </span>
+      </div>
+
+      <!-- Corps -->
+      <div class="card-body px-3 py-2">
+        <div class="text-muted" style="font-size:0.75rem; margin-bottom:6px;">
+          Ajouté le {{ t.added_at[:16].replace('T',' ') }}
+          {% if t.quantity %} — {{ t.quantity }} {{ t.unit }}{% endif %}
+        </div>
+
+        {% if t.before_value is not none or t.after_value is not none %}
+        <div class="d-flex align-items-center gap-2 flex-wrap" style="font-size:0.88rem;">
+
+          <!-- Avant -->
+          <div class="text-center px-2 py-1 rounded" class="cell-measure" style="min-width:70px;">
+            <div class="text-muted" style="font-size:0.68rem;">Avant</div>
+            {% if t.before_value is not none %}
+            <div class="fw-bold" style="color:var(--blue-deep);">
+              {{ t.before_value }}{{ punit.get(t.parameter,'') }}
+            </div>
+            <div class="text-muted" style="font-size:0.68rem;">{{ t.before_date }}</div>
+            {% else %}
+            <div class="text-muted">—</div>
+            {% endif %}
+          </div>
+
+          <!-- Flèche + delta -->
+          <div class="text-center flex-shrink-0">
+            {% if t.delta is not none %}
+              {% if t.delta > 0 %}
+                <span style="color:var(--yellow-warn); font-size:1.1rem;">⬆</span>
+                <div class="fw-bold small" style="color:var(--yellow-warn);">+{{ t.delta }}{{ punit.get(t.parameter,'') }}</div>
+              {% elif t.delta < 0 %}
+                <span style="color:var(--red-bad); font-size:1.1rem;">⬇</span>
+                <div class="fw-bold small" style="color:var(--red-bad);">{{ t.delta }}{{ punit.get(t.parameter,'') }}</div>
+              {% else %}
+                <span class="text-muted">↔</span>
+              {% endif %}
+            {% else %}
+              <span class="text-muted opacity-50">→</span>
+            {% endif %}
+          </div>
+
+          <!-- Après -->
+          <div class="text-center px-2 py-1 rounded" class="cell-measure" style="min-width:70px;">
+            <div class="text-muted" style="font-size:0.68rem;">Après</div>
+            {% if t.after_value is not none %}
+            {% set ast = t.outcome %}
+            <div class="fw-bold" style="color:{{ '#2dc653' if ast == 'corrected' else ('#f5a623' if ast == 'improved' else ('#e63946' if ast == 'overcorrected' else 'var(--text-dark)')) }};">
+              {{ t.after_value }}{{ punit.get(t.parameter,'') }}
+            </div>
+            <div class="text-muted" style="font-size:0.68rem;">{{ t.after_date }}</div>
+            {% elif t.outcome == 'pending' %}
+            <div class="text-muted small">En attente</div>
+            {% else %}
+            <div class="text-muted">—</div>
+            {% endif %}
+          </div>
+
+        </div>
+        {% else %}
+        <div class="text-muted small">Aucune mesure de référence trouvée.</div>
+        {% endif %}
+
+        {% if t.notes %}
+        <div class="text-muted mt-1" style="font-size:0.72rem;">📝 {{ t.notes }}</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+<!-- ── Statistiques mensuelles (Feature 16) ─────────────────────────────────── -->
+<div id="monthly-section" style="display:none;" class="mb-4">
+  <h5 class="text-blue-deep fw-bold mb-3">📅 Évolution saison — vue mensuelle</h5>
+  <div class="row g-4 mb-3">
+    <div class="col-md-6">
+      <div class="card chart-card">
+        <div class="card-header">💧 pH — min / moy / max</div>
+        <div class="card-body"><canvas id="monthly-ph"></canvas></div>
+      </div>
+    </div>
+    <div class="col-md-6">
+      <div class="card chart-card">
+        <div class="card-header">🧪 Brome (ppm) — min / moy / max</div>
+        <div class="card-body"><canvas id="monthly-br"></canvas></div>
+      </div>
+    </div>
+    <div class="col-md-6">
+      <div class="card chart-card">
+        <div class="card-header">🪨 Dureté TH (ppm) — min / moy / max</div>
+        <div class="card-body"><canvas id="monthly-th"></canvas></div>
+      </div>
+    </div>
+    <div class="col-md-6">
+      <div class="card chart-card">
+        <div class="card-header">⚗️ Alcalinité TAC (ppm) — min / moy / max</div>
+        <div class="card-body"><canvas id="monthly-tac"></canvas></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Comparaison N vs N-1 ──────────────────────────────────────────────── -->
+{% set has_yoy = yoy_data and yoy_data != '{}' %}
+{% if has_yoy %}
+<div class="mb-4">
+  <h5 class="text-blue-deep fw-bold mb-3">📅 Comparaison {{ yoy_curr_year }} vs {{ yoy_prev_year }}</h5>
+  <div class="row g-4">
+    <div class="col-md-6">
+      <div class="card chart-card">
+        <div class="card-header">💧 pH — moy. mensuelle</div>
+        <div class="card-body"><canvas id="yoy-ph"></canvas></div>
+      </div>
+    </div>
+    <div class="col-md-6">
+      <div class="card chart-card">
+        <div class="card-header">🧪 Brome (ppm) — moy. mensuelle</div>
+        <div class="card-body"><canvas id="yoy-br"></canvas></div>
+      </div>
+    </div>
+    <div class="col-md-6">
+      <div class="card chart-card">
+        <div class="card-header">🪨 Dureté TH (ppm) — moy. mensuelle</div>
+        <div class="card-body"><canvas id="yoy-th"></canvas></div>
+      </div>
+    </div>
+    <div class="col-md-6">
+      <div class="card chart-card">
+        <div class="card-header">⚗️ Alcalinité TAC (ppm) — moy. mensuelle</div>
+        <div class="card-body"><canvas id="yoy-tac"></canvas></div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<!-- ── Table ───────────────────────────────────────────────────────────────── -->
+{% if measurements %}
+<div class="card" style="border:none; border-radius:16px; box-shadow:0 2px 12px rgba(0,119,182,0.10); overflow:hidden;">
+  <div class="table-responsive">
+    <table class="table table-pool table-hover mb-0">
+      <thead>
+        <tr>
+          <th>📅 Date</th>
+          <th>💧 pH</th>
+          <th>🧪 Brome</th>
+          <th>🪨 Dureté</th>
+          <th>⚗️ Alcalinité</th>
+          <th>🌡️ Temp.</th>
+          <th>📝 Notes</th>
+          <th>📷</th>
+          <th style="width:80px"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for m in measurements %}
+        {% set row_statuses = m.statuses.values() | list %}
+        <tr data-all-ok="{{ 'true' if row_statuses and row_statuses | select('equalto', 'ok') | list | length == row_statuses | length else 'false' }}">
+          <td class="text-nowrap">{{ m.measured_at[:16].replace('T',' ') }}</td>
+          <td>
+            {% if m.ph is not none %}
+              <span class="fw-semibold val-{{ m.statuses.get('ph', 'none') }}">{{ m.ph }}</span>
+            {% else %}–{% endif %}
+          </td>
+          <td>
+            {% if m.bromine is not none %}
+              <span class="fw-semibold val-{{ m.statuses.get('bromine', 'none') }}">{{ m.bromine }} ppm</span>
+            {% else %}–{% endif %}
+          </td>
+          <td>
+            {% if m.hardness is not none %}
+              <span class="fw-semibold val-{{ m.statuses.get('hardness', 'none') }}">{{ m.hardness }} ppm</span>
+            {% else %}–{% endif %}
+          </td>
+          <td>
+            {% if m.alkalinity is not none %}
+              <span class="fw-semibold val-{{ m.statuses.get('alkalinity', 'none') }}">{{ m.alkalinity }} ppm</span>
+            {% else %}–{% endif %}
+          </td>
+          <td class="text-muted small">
+            {% if m.temperature is not none %}{{ m.temperature }}°C{% else %}–{% endif %}
+          </td>
+          <td class="text-muted small">{{ m.notes or '' }}</td>
+          <td>
+            {% if m.photo_path %}
+            <a href="{{ url_for('static', filename='uploads/' + m.photo_path) }}"
+               target="_blank" rel="noopener" title="Voir la photo">
+              <img src="{{ url_for('static', filename='uploads/' + m.photo_path) }}"
+                   alt="photo" style="height:36px; width:auto; border-radius:4px; object-fit:cover;">
+            </a>
+            {% endif %}
+          </td>
+          <td>
+            <div class="d-flex gap-1">
+              <button type="button" class="btn btn-sm btn-outline-primary btn-edit" title="Modifier"
+                      data-id="{{ m.id }}">✏️</button>
+              <form action="{{ url_for('delete_measurement', id=m.id) }}" method="post"
+                    onsubmit="return confirm('Supprimer cette mesure ?')">
+                <button type="submit" class="btn btn-sm btn-outline-danger" title="Supprimer">🗑️</button>
+              </form>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% if table_truncated %}
+<div class="alert alert-warning d-flex align-items-center gap-2 mt-2 mb-0 rounded-3 small" style="border-left: 4px solid var(--yellow-warn);">
+  ⚠️ Le tableau affiche les <strong>{{ table_limit }} mesures les plus récentes</strong> sur {{ total_count }} au total.
+  Les graphiques, statistiques et exports CSV couvrent <strong>toutes</strong> les mesures.
+  Pour voir des mesures plus anciennes, utilisez le filtre de dates ci-dessus.
+</div>
+{% endif %}
+{% else %}
+<div class="all-good">
+  📋 Aucune mesure enregistrée pour l'instant.
+  <a href="{{ url_for('index') }}" class="ms-2 text-decoration-none">Ajouter une mesure →</a>
+</div>
+{% endif %}
+
+<!-- ── Modale d'édition ────────────────────────────────────────────────────── -->
+<div class="modal fade" id="editModal" tabindex="-1" aria-labelledby="editModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content" style="border-radius:16px; border:none; overflow:hidden;">
+      <div class="modal-header" style="background:linear-gradient(135deg,#023e8a,#0077b6); color:#fff; border:none;">
+        <h5 class="modal-title" id="editModalLabel">✏️ Modifier la mesure</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <form id="editForm" method="post" enctype="multipart/form-data">
+        <div class="modal-body p-4">
+          <div class="mb-3">
+            <label class="form-label fw-semibold">📅 Date et heure</label>
+            <input type="datetime-local" class="form-control" name="measured_at" id="edit-measured_at" required>
+          </div>
+          <div class="row g-3 mb-3">
+            <div class="col-6 col-md-3">
+              <label class="form-label fw-semibold">💧 pH</label>
+              <input type="number" class="form-control" name="ph" id="edit-ph"
+                     step="0.1" min="3" max="12" placeholder="—">
+              <div class="form-text">Idéal : 7,2 – 7,6</div>
+            </div>
+            <div class="col-6 col-md-3">
+              <label class="form-label fw-semibold">🧪 Brome (ppm)</label>
+              <input type="number" class="form-control" name="bromine" id="edit-bromine"
+                     step="0.1" min="0" placeholder="—">
+              <div class="form-text">Idéal : 3 – 5 ppm</div>
+            </div>
+            <div class="col-6 col-md-3">
+              <label class="form-label fw-semibold">🪨 Dureté (ppm)</label>
+              <input type="number" class="form-control" name="hardness" id="edit-hardness"
+                     step="1" min="0" placeholder="—">
+              <div class="form-text">Idéal : 200 – 400</div>
+            </div>
+            <div class="col-6 col-md-3">
+              <label class="form-label fw-semibold">⚗️ Alcalinité (ppm)</label>
+              <input type="number" class="form-control" name="alkalinity" id="edit-alkalinity"
+                     step="1" min="0" placeholder="—">
+              <div class="form-text">Idéal : 80 – 120</div>
+            </div>
+          </div>
+          <div class="row g-3 mb-3">
+            <div class="col-6 col-md-3">
+              <label class="form-label fw-semibold">🌡️ Température (°C)</label>
+              <input type="number" class="form-control" name="temperature" id="edit-temperature"
+                     step="0.01" min="0" max="50" placeholder="—">
+            </div>
+          </div>
+          <div class="mb-1">
+            <label class="form-label fw-semibold">📝 Notes</label>
+            <textarea class="form-control" name="notes" id="edit-notes" rows="2"
+                      placeholder="Ex: après pluie, après choc brome..."></textarea>
+          </div>
+          <div class="mb-1">
+            <label class="form-label fw-semibold">📷 Photo</label>
+            <div id="edit-photo-preview" class="mb-2" style="display:none;">
+              <img id="edit-photo-img" src="" alt="photo actuelle"
+                   style="max-height:120px; border-radius:6px; object-fit:cover;">
+              <div class="form-check mt-1">
+                <input class="form-check-input" type="checkbox" name="remove_photo"
+                       value="1" id="edit-remove-photo">
+                <label class="form-check-label small text-danger" for="edit-remove-photo">
+                  Supprimer la photo
+                </label>
+              </div>
+            </div>
+            <input type="file" class="form-control form-control-sm" name="photo"
+                   accept="image/jpeg,image/png,image/webp" capture="environment" id="edit-photo-input">
+            <div class="form-text">Laisser vide pour conserver la photo existante.</div>
+          </div>
+        </div>
+        <div class="modal-footer" style="border-top:1px solid #e9ecef;">
+          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Annuler</button>
+          <button type="submit" class="btn btn-pool">💾 Sauvegarder</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- ── Modale purge ────────────────────────────────────────────────────────── -->
+<div class="modal fade" id="purgeModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-sm">
+    <div class="modal-content" style="border-radius:14px; overflow:hidden;">
+      <div class="modal-header" style="background:linear-gradient(135deg,#c0392b,#e74c3c); color:#fff; border:none;">
+        <h5 class="modal-title">🗑️ Supprimer des mesures</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <form action="{{ url_for('purge_measurements') }}" method="post">
+        <div class="modal-body">
+          <p class="small text-muted mb-3">
+            Supprime définitivement toutes les mesures <strong>strictement antérieures</strong> à la date choisie.
+          </p>
+          <label class="form-label small fw-semibold">Supprimer avant le</label>
+          <input type="date" name="before_date" class="form-control mb-3" required>
+          <div class="alert alert-warning py-2 px-3 small mb-0">
+            ⚠️ Action irréversible. Faites un
+            <a href="{{ url_for('settings_page') }}#backup">backup</a> avant de procéder.
+          </div>
+        </div>
+        <div class="modal-footer" style="border-top:1px solid #f5c6cb;">
+          <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Annuler</button>
+          <button type="submit" class="btn btn-danger btn-sm"
+                  onclick="return confirm('Supprimer toutes les mesures avant cette date ?\n\nCette action est irréversible !')">
+            🗑️ Supprimer
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+const labels = {{ chart_labels | safe }};
+
+// Plugin : zone idéale dessinée directement sur le canvas (indépendante du nb de points)
+const idealZonePlugin = {
+  id: 'idealZone',
+  beforeDatasetsDraw(chart) {
+    const { ctx, chartArea, scales } = chart;
+    if (!chartArea) return;
+    const opts = (chart.options.plugins || {}).idealZone;
+    if (!opts) return;
+    const y    = scales.y;
+    // Clamper aux bords du graphique pour éviter le débordement
+    const yTop = Math.max(chartArea.top,    y.getPixelForValue(opts.max));
+    const yBot = Math.min(chartArea.bottom, y.getPixelForValue(opts.min));
+    if (yBot <= yTop) return;
+    ctx.save();
+    // Clipper strictement à la zone graphique
+    ctx.beginPath();
+    ctx.rect(chartArea.left, chartArea.top, chartArea.width, chartArea.height);
+    ctx.clip();
+    // Fond vert
+    ctx.fillStyle = 'rgba(45,198,83,0.20)';
+    ctx.fillRect(chartArea.left, yTop, chartArea.width, yBot - yTop);
+    // Bordures en tirets
+    ctx.strokeStyle = 'rgba(45,198,83,0.80)';
+    ctx.lineWidth   = 1.5;
+    ctx.setLineDash([6, 4]);
+    ctx.beginPath(); ctx.moveTo(chartArea.left, yTop); ctx.lineTo(chartArea.right, yTop); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(chartArea.left, yBot); ctx.lineTo(chartArea.right, yBot); ctx.stroke();
+    ctx.restore();
+  }
+};
+
+function makeChart(id, data, minIdeal, maxIdeal, color, unit) {
+  const ctx = document.getElementById(id);
+  if (!ctx) return;
+  new Chart(ctx, {
+    type: 'line',
+    plugins: [idealZonePlugin],
+    data: {
+      labels: labels,
+      datasets: [{
+        label: 'Mesure',
+        data: data,
+        borderColor: color,
+        backgroundColor: color + '22',
+        borderWidth: 2.5,
+        pointRadius: 4,
+        pointHoverRadius: 6,
+        tension: 0.3,
+        spanGaps: true,
+        fill: false,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        idealZone: { min: minIdeal, max: maxIdeal },
+        legend: { display: false },
+        title: {
+          display: true,
+          text: `Zone idéale : ${minIdeal} – ${maxIdeal}${unit}`,
+          color: 'rgba(45,198,83,0.95)',
+          font: { size: 11, weight: 'normal' },
+          align: 'end',
+          padding: { top: 2, bottom: 6 },
+        },
+        tooltip: {
+          callbacks: {
+            label:     ctx  => ` Mesure : ${ctx.parsed.y}${unit}`,
+            afterBody: ()   => [`Zone idéale : ${minIdeal} – ${maxIdeal}${unit}`],
+          }
+        }
+      },
+      scales: {
+        x: { ticks: { maxRotation: 45, font: { size: 11 }, maxTicksLimit: 10 } },
+        y: {
+          suggestedMin: minIdeal - (maxIdeal - minIdeal) * 0.4,
+          suggestedMax: maxIdeal + (maxIdeal - minIdeal) * 0.4,
+          ticks: { font: { size: 11 } },
+        }
+      }
+    }
+  });
+}
+
+makeChart('chart-ph',         {{ chart_ph | safe }},         {{ ideal.ph.min }},         {{ ideal.ph.max }},         '#0077b6', '');
+makeChart('chart-bromine',    {{ chart_bromine | safe }},    {{ ideal.bromine.min }},    {{ ideal.bromine.max }},    '#2196f3', ' ppm');
+makeChart('chart-hardness',   {{ chart_hardness | safe }},   {{ ideal.hardness.min }},   {{ ideal.hardness.max }},   '#00b4d8', ' ppm');
+makeChart('chart-alkalinity', {{ chart_alkalinity | safe }}, {{ ideal.alkalinity.min }}, {{ ideal.alkalinity.max }}, '#023e8a', ' ppm');
+
+// ── Graphique température HA (labels et données indépendants) ─────────────────
+{% if temp_count > 0 %}
+(function () {
+  const ctx = document.getElementById('chart-temperature');
+  if (!ctx) return;
+  const tempLabels = {{ chart_temp_labels | safe }};
+  const tempValues = {{ chart_temp_values | safe }};
+  const n = tempLabels.length;
+  new Chart(ctx, {
+    type: 'line',
+    plugins: [idealZonePlugin],
+    data: {
+      labels: tempLabels,
+      datasets: [{
+        label: 'Température',
+        data: tempValues,
+        borderColor: '#f77f00',
+        backgroundColor: '#f77f0022',
+        borderWidth: 2,
+        pointRadius: n > 100 ? 0 : 3,
+        pointHoverRadius: 5,
+        tension: 0.3,
+        spanGaps: true,
+        fill: true,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        idealZone: { min: 20, max: 32 },
+        legend: { display: false },
+        title: {
+          display: true,
+          text: 'Zone idéale : 20 – 32°C',
+          color: 'rgba(45,198,83,0.95)',
+          font: { size: 11, weight: 'normal' },
+          align: 'end',
+          padding: { top: 2, bottom: 6 },
+        },
+        tooltip: {
+          callbacks: {
+            label:     ctx => ` Température : ${ctx.parsed.y}°C`,
+            afterBody: ()  => ['Zone idéale : 20 – 32°C'],
+          }
+        }
+      },
+      scales: {
+        x: { ticks: { maxRotation: 45, font: { size: 10 }, maxTicksLimit: 12 } },
+        y: {
+          suggestedMin: 15,
+          suggestedMax: 37,
+          ticks: { font: { size: 11 } },
+        }
+      }
+    }
+  });
+})();
+{% endif %}
+
+// ── Graphiques mensuels (Feature 16) ─────────────────────────────────────────
+const monthlyStats = {{ monthly_stats | safe }};
+
+function makeMonthlyChart(canvasId, avgKey, minKey, maxKey, color, minIdeal, maxIdeal) {
+  const ctx = document.getElementById(canvasId);
+  if (!ctx || !monthlyStats.length) return;
+  const monthLabels = monthlyStats.map(m => m.month);
+  const n = monthLabels.length;
+
+  new Chart(ctx, {
+    data: {
+      labels: monthLabels,
+      datasets: [
+        {
+          type: 'bar',
+          label: 'Plage min–max',
+          data: monthlyStats.map(m => (m[minKey] != null && m[maxKey] != null) ? [m[minKey], m[maxKey]] : null),
+          backgroundColor: color + '35',
+          borderColor:     color + '90',
+          borderWidth: 1,
+          borderSkipped: false,
+          order: 3,
+        },
+        {
+          type: 'line',
+          label: 'Moyenne',
+          data: monthlyStats.map(m => m[avgKey]),
+          borderColor: color,
+          backgroundColor: 'transparent',
+          borderWidth: 2.5,
+          pointRadius: 5,
+          pointHoverRadius: 7,
+          tension: 0.3,
+          spanGaps: true,
+          order: 1,
+        },
+        {
+          type: 'line',
+          label: 'Zone idéale (max)',
+          data: Array(n).fill(maxIdeal),
+          borderColor: '#2dc65355',
+          borderWidth: 1,
+          borderDash: [6, 4],
+          pointRadius: 0,
+          fill: '+1',
+          backgroundColor: 'rgba(45,198,83,0.07)',
+          order: 4,
+        },
+        {
+          type: 'line',
+          label: 'Zone idéale (min)',
+          data: Array(n).fill(minIdeal),
+          borderColor: '#2dc65355',
+          borderWidth: 1,
+          borderDash: [6, 4],
+          pointRadius: 0,
+          fill: false,
+          order: 5,
+        },
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { display: true, labels: { boxWidth: 12, font: { size: 10 }, filter: i => i.datasetIndex < 2 } },
+        tooltip: {
+          callbacks: {
+            afterFooter: (items) => {
+              const idx = items[0]?.dataIndex;
+              return idx != null ? `Tests ce mois : ${monthlyStats[idx].cnt}` : '';
+            }
+          }
+        }
+      },
+      scales: {
+        x: { ticks: { font: { size: 11 } } },
+        y: { ticks: { font: { size: 11 } } },
+      }
+    }
+  });
+}
+
+if (monthlyStats.length > 1) {
+  document.getElementById('monthly-section').style.display = '';
+  makeMonthlyChart('monthly-ph',  'avg_ph',  'min_ph',  'max_ph',  '#0077b6', {{ ideal.ph.min }},         {{ ideal.ph.max }});
+  makeMonthlyChart('monthly-br',  'avg_br',  'min_br',  'max_br',  '#2196f3', {{ ideal.bromine.min }},    {{ ideal.bromine.max }});
+  makeMonthlyChart('monthly-th',  'avg_th',  'min_th',  'max_th',  '#00b4d8', {{ ideal.hardness.min }},   {{ ideal.hardness.max }});
+  makeMonthlyChart('monthly-tac', 'avg_tac', 'min_tac', 'max_tac', '#023e8a', {{ ideal.alkalinity.min }}, {{ ideal.alkalinity.max }});
+}
+
+// ── Comparaison N vs N-1 ──────────────────────────────────────────────────────
+(function () {
+  const yoy   = {{ yoy_data | safe }};
+  const CY    = String({{ yoy_curr_year }});
+  const PY    = String({{ yoy_prev_year }});
+  const MTHS  = ['','Jan','Fév','Mar','Avr','Mai','Juin','Juil','Aoû','Sep','Oct','Nov','Déc'];
+  const MONTHS = ['01','02','03','04','05','06','07','08','09','10','11','12'];
+
+  function makeYoY(id, key, minI, maxI, unit) {
+    const ctx = document.getElementById(id);
+    if (!ctx) return;
+    const cur  = MONTHS.map(m => yoy[CY]?.[m]?.[key] ?? null);
+    const prev = MONTHS.map(m => yoy[PY]?.[m]?.[key] ?? null);
+    if (cur.every(v => v === null) && prev.every(v => v === null)) return;
+    new Chart(ctx, {
+      type: 'line',
+      plugins: [idealZonePlugin],
+      data: {
+        labels: MONTHS.map(m => MTHS[+m]),
+        datasets: [
+          { label: CY,  data: cur,  borderColor: '#0077b6', backgroundColor: '#0077b618',
+            borderWidth: 2.5, pointRadius: 4, spanGaps: false, fill: false },
+          { label: PY,  data: prev, borderColor: '#90caf9', backgroundColor: '#90caf918',
+            borderWidth: 2,   pointRadius: 3, borderDash: [5,3], spanGaps: false, fill: false },
+        ]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          idealZone: { min: minI, max: maxI },
+          legend: { display: true, labels: { font: { size: 11 } } },
+          title: { display: true,
+            text: `Zone idéale : ${minI} – ${maxI}${unit}`,
+            color: 'rgba(45,198,83,0.95)', font: { size: 11, weight: 'normal' },
+            align: 'end', padding: { top: 2, bottom: 6 } },
+          tooltip: { callbacks: { label: c => ` ${c.dataset.label} : ${c.parsed.y ?? '–'}${unit}` } }
+        },
+        scales: {
+          x: { ticks: { font: { size: 11 } } },
+          y: { suggestedMin: minI - (maxI-minI)*0.4,
+               suggestedMax: maxI + (maxI-minI)*0.4,
+               ticks: { font: { size: 11 } } }
+        }
+      }
+    });
+  }
+
+  makeYoY('yoy-ph',  'avg_ph', {{ ideal.ph.min }},         {{ ideal.ph.max }},         '');
+  makeYoY('yoy-br',  'avg_br', {{ ideal.bromine.min }},    {{ ideal.bromine.max }},    ' ppm');
+  makeYoY('yoy-th',  'avg_th', {{ ideal.hardness.min }},   {{ ideal.hardness.max }},   ' ppm');
+  makeYoY('yoy-tac', 'avg_tac',{{ ideal.alkalinity.min }}, {{ ideal.alkalinity.max }}, ' ppm');
+})();
+
+// ── Modale d'édition ─────────────────────────────────────────────────────────
+const editModal = new bootstrap.Modal(document.getElementById('editModal'));
+let editModalDirty = false;
+
+// Marquer dirty dès qu'un champ est modifié
+document.querySelectorAll('#editForm input, #editForm textarea').forEach(el => {
+  el.addEventListener('input', () => { editModalDirty = true; });
+});
+document.getElementById('edit-photo-input')?.addEventListener('change', () => { editModalDirty = true; });
+document.getElementById('edit-remove-photo')?.addEventListener('change', () => { editModalDirty = true; });
+
+// Effacer le flag à la soumission
+document.getElementById('editForm').addEventListener('submit', () => { editModalDirty = false; });
+
+// Confirmation si fermeture avec modifications non sauvegardées
+document.getElementById('editModal').addEventListener('hide.bs.modal', e => {
+  if (editModalDirty && !confirm('Des modifications non sauvegardées seront perdues.\n\nFermer quand même ?')) {
+    e.preventDefault();
+  }
+});
+
+document.querySelectorAll('.btn-edit').forEach(btn => {
+  btn.addEventListener('click', async () => {
+    const id = btn.dataset.id;
+    try {
+      const r = await fetch(`/edit/${id}`);
+      if (!r.ok) throw new Error(`Erreur serveur (HTTP ${r.status})`);
+      if (!(r.headers.get('content-type') || '').includes('application/json'))
+        throw new Error('Réponse inattendue du serveur — rechargez la page.');
+      const m = await r.json();
+
+      // Remplir le formulaire (sans déclencher 'input')
+      document.getElementById('edit-measured_at').value  = m.measured_at ? m.measured_at.slice(0, 16) : '';
+      document.getElementById('edit-ph').value           = m.ph          ?? '';
+      document.getElementById('edit-bromine').value      = m.bromine     ?? '';
+      document.getElementById('edit-hardness').value     = m.hardness    ?? '';
+      document.getElementById('edit-alkalinity').value   = m.alkalinity  ?? '';
+      document.getElementById('edit-temperature').value  = m.temperature ?? '';
+      document.getElementById('edit-notes').value        = m.notes       ?? '';
+
+      document.getElementById('editForm').action = `/edit/${id}`;
+      editModalDirty = false;
+
+      // Photo preview
+      const photoPreview = document.getElementById('edit-photo-preview');
+      const photoImg     = document.getElementById('edit-photo-img');
+      const removeCheck  = document.getElementById('edit-remove-photo');
+      if (m.photo_path) {
+        photoImg.src = `/static/uploads/${m.photo_path}`;
+        photoPreview.style.display = 'block';
+        removeCheck.checked = false;
+      } else {
+        photoPreview.style.display = 'none';
+      }
+
+      editModal.show();
+      // Focus sur le premier champ après animation d'ouverture
+      document.getElementById('editModal').addEventListener('shown.bs.modal', () => {
+        document.getElementById('edit-measured_at').focus();
+      }, { once: true });
+    } catch (e) {
+      alert('Impossible de charger la mesure : ' + e.message);
+    }
+  });
+});
+
+// ── Filtre "hors norme" ───────────────────────────────────────────────────────
+(function () {
+  const btn  = document.getElementById('btn-filter-issues');
+  if (!btn) return;
+  let active = false;
+  btn.addEventListener('click', () => {
+    active = !active;
+    btn.classList.toggle('btn-warning',         active);
+    btn.classList.toggle('btn-outline-warning', !active);
+    document.querySelectorAll('table.table-pool tbody tr').forEach(row => {
+      row.style.display = active && row.dataset.allOk === 'true' ? 'none' : '';
+    });
+  });
+})();
+</script>
+{% endblock %}

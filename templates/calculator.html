@@ -1,0 +1,709 @@
+{% extends "base.html" %}
+{% block title %}Calculateur – Piscine Manager{% endblock %}
+
+{% block content %}
+
+<div class="page-header d-flex align-items-center justify-content-between flex-wrap gap-2">
+  <div>
+    <h1>🧮 Calculateur de produits</h1>
+    <p>Entrez les valeurs de votre dosage étiquette, les résultats se calculent en temps réel.</p>
+  </div>
+  <button type="button" class="btn btn-outline-secondary btn-sm" id="btn-reset-calc" title="Remettre tous les champs à zéro">
+    🔄 Réinitialiser
+  </button>
+</div>
+
+<!-- ── Volume piscine ────────────────────────────────────────────────────────── -->
+<div class="settings-section d-flex align-items-center gap-3 flex-wrap mb-4 py-3">
+  <span>🏊 <strong>Volume de ma piscine :</strong></span>
+  <div class="input-group" style="width:200px;">
+    <input type="number" id="pool-volume" class="form-control" value="{{ pool_volume }}" min="100" step="100">
+    <span class="input-group-text">litres</span>
+  </div>
+  <span class="text-muted small">= <span id="pool-volume-m3">{{ (pool_volume/1000)|round(1) }}</span> m³ — les doses se recalculent automatiquement.</span>
+  {% if last %}
+  <span class="ms-3 small" style="color:var(--blue-mid);">
+    📋 Valeurs actuelles pré-remplies depuis le dernier test du <strong>{{ last.measured_at[:16].replace('T',' ') }}</strong>
+  </span>
+  {% endif %}
+</div>
+
+<!-- ── Cartes calculateur ─────────────────────────────────────────────────────── -->
+<div class="row g-4 mb-5">
+
+{% set params = [
+  ('alkalinity', '⚗️', 'Alcalinité (TAC)', 'ppm',
+   ideal.alkalinity.min, ideal.alkalinity.max, ideal.alkalinity.ideal),
+  ('ph', '💧', 'pH', '',
+   ideal.ph.min, ideal.ph.max, ideal.ph.ideal),
+  ('hardness', '🪨', 'Dureté (TH)', 'ppm',
+   ideal.hardness.min, ideal.hardness.max, ideal.hardness.ideal),
+  ('bromine', '🧪', 'Brome', 'ppm',
+   ideal.bromine.min, ideal.bromine.max, ideal.bromine.ideal),
+] %}
+
+{% for key, icon, label, unit, vmin, vmax, videal in params %}
+<div class="col-md-6">
+  <div class="card calc-card h-100" data-param="{{ key }}">
+    <div class="card-header d-flex align-items-center gap-2">
+      {{ icon }} {{ label }}{% if unit %} <span class="opacity-75">({{ unit }})</span>{% endif %}
+      <span class="ms-auto badge bg-light text-secondary calc-direction-badge" data-param="{{ key }}"></span>
+    </div>
+    <div class="card-body p-3">
+
+      <!-- Valeurs courante / cible -->
+      <div class="row g-2 align-items-end mb-1">
+        <div class="col-5">
+          <label class="form-label small fw-semibold mb-1 d-flex justify-content-between align-items-center">
+            Votre mesure
+            {% if last and last[key] is not none %}
+            <button type="button" class="btn-ideal btn-last"
+                    data-last="{{ last[key] }}" data-param="{{ key }}"
+                    title="Utiliser la dernière mesure ({{ last[key] }})">
+              ↺ dernière
+            </button>
+            {% endif %}
+          </label>
+          <div class="input-group input-group-sm">
+            <input type="number" class="form-control calc-current" data-param="{{ key }}"
+                   step="{{ '0.1' if key == 'ph' else '1' }}" min="0"
+                   placeholder="–"
+                   value="{{ last[key] if last and last[key] is not none else '' }}">
+            {% if unit %}<span class="input-group-text">{{ unit }}</span>{% endif %}
+          </div>
+        </div>
+
+        <div class="col-2 text-center pb-1">
+          <span class="calc-arrow fs-4 text-muted" data-param="{{ key }}">→</span>
+        </div>
+
+        <div class="col-5">
+          <label class="form-label small fw-semibold mb-1 d-flex justify-content-between align-items-center">
+            Objectif
+            <button type="button" class="btn-ideal"
+                    data-ideal="{{ videal }}" data-param="{{ key }}"
+                    title="Utiliser la valeur idéale ({{ videal }})">
+              ✦ idéal
+            </button>
+          </label>
+          <div class="input-group input-group-sm">
+            <input type="number" class="form-control calc-target" data-param="{{ key }}"
+                   step="{{ '0.1' if key == 'ph' else '1' }}" min="0"
+                   placeholder="{{ videal }}">
+            {% if unit %}<span class="input-group-text">{{ unit }}</span>{% endif %}
+          </div>
+        </div>
+      </div>
+
+      <div class="form-text mb-3">Zone idéale : {{ vmin }} – {{ vmax }}{% if unit %} {{ unit }}{% endif %}</div>
+
+      <!-- Sélecteur de produit -->
+      <div class="mb-3">
+        <label class="form-label small fw-semibold">Produit</label>
+        <select class="form-select form-select-sm calc-product" data-param="{{ key }}">
+          <option value="">— Sélectionner un produit —</option>
+        </select>
+        <div class="form-text calc-product-info" data-param="{{ key }}"></div>
+      </div>
+
+      <!-- Spinner calcul -->
+      <div class="calc-loading" data-param="{{ key }}" style="display:none;">
+        <div class="d-flex align-items-center gap-2 text-muted small py-2">
+          <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+          Calcul en cours…
+        </div>
+      </div>
+
+      <!-- Résultat -->
+      <div class="calc-result" data-param="{{ key }}" style="display:none;">
+        <div class="result-box d-flex align-items-center gap-3 p-3 rounded">
+          <div class="result-icon fs-2"></div>
+          <div class="flex-grow-1">
+            <div class="result-dose-line">
+              <span class="result-dose fw-bold" style="font-size:1.5rem; color:var(--blue-deep);"></span>
+              <span class="result-unit fw-semibold ms-1" style="font-size:1rem; color:var(--blue-mid);"></span>
+            </div>
+            <div class="result-detail text-muted small mt-1"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="calc-no-change" data-param="{{ key }}" style="display:none;">
+        <div class="all-good py-2 small">✅ Valeur dans les normes — aucune correction nécessaire !</div>
+      </div>
+
+      <div class="calc-hint" data-param="{{ key }}" style="display:none;">
+        <div class="p-2 rounded text-muted small hint-box">
+          💡 Entrez vos valeurs et sélectionnez un produit pour calculer la dose.
+        </div>
+      </div>
+
+      <div class="calc-no-product" data-param="{{ key }}" style="display:none;">
+        <div class="p-2 rounded small" style="background:#fff3cd; border:1px solid #ffc107; color:#664d03;">
+          📦 Aucun produit disponible pour ce paramètre.
+          <a href="#produits" class="fw-semibold ms-1">Ajouter un produit ↓</a>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+{% endfor %}
+
+</div>
+
+<!-- ── Gestion des produits ──────────────────────────────────────────────────── -->
+<div id="produits" class="settings-section">
+  <h5>📦 Mes produits</h5>
+  <p class="text-muted small mb-3">
+    Enregistrez les informations de dosage de chaque seau ou bidon
+    (indiquées sur l'étiquette). Le calculateur s'en servira automatiquement.
+  </p>
+
+  <!-- Tableau -->
+  {% if products %}
+  <div class="table-responsive mb-4">
+    <table class="table table-sm table-hover table-pool align-middle">
+      <thead>
+        <tr>
+          <th>Paramètre</th>
+          <th>Produit</th>
+          <th colspan="5" class="text-center">Dosage étiquette</th>
+          <th>⏱️ Attente</th>
+          <th></th>
+        </tr>
+        <tr class="table-light small text-muted">
+          <th></th><th></th>
+          <th>Dose</th><th>pour</th><th>Variation</th><th>dans</th><th>Volume réf.</th>
+          <th></th><th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for p in products %}
+        {% set plabel = {'alkalinity':'⚗️ TAC','ph':'💧 pH','hardness':'🪨 TH','bromine':'🧪 Brome'} %}
+        <tr>
+          <td>
+            {{ plabel[p.parameter] }}
+            <span class="badge ms-1 {{ 'bg-success' if p.direction == 'up' else 'bg-danger' }}">
+              {{ '⬆' if p.direction == 'up' else '⬇' }}
+            </span>
+          </td>
+          <td class="fw-semibold">{{ p.name }}</td>
+          <td class="text-primary fw-bold">{{ p.ref_dose }} {{ p.ref_dose_unit }}</td>
+          <td class="text-muted small">→</td>
+          <td>
+            {{ ('+' if p.direction == 'up' else '−') }}{{ p.ref_change }}
+            <span class="text-muted">{{ 'pH' if p.parameter == 'ph' else 'ppm' }}</span>
+          </td>
+          <td class="text-muted small">dans</td>
+          <td>{{ p.ref_volume }} {{ p.ref_volume_unit }}</td>
+          <td class="text-nowrap">
+            <span class="badge bg-light text-secondary border">{{ p.wait_hours | int }}h</span>
+          </td>
+          <td>
+            {% if p.buy_url %}
+            <a href="{{ p.buy_url }}" target="_blank" rel="noopener noreferrer"
+               class="btn btn-sm btn-outline-secondary" title="Acheter ce produit">🛒</a>
+            {% endif %}
+          </td>
+          <td>
+            <div class="d-flex gap-1">
+              <button type="button" class="btn btn-sm btn-outline-primary btn-edit-product"
+                      data-id="{{ p.id }}" title="Modifier">✏️</button>
+              <form action="{{ url_for('delete_product', id=p.id) }}" method="post"
+                    onsubmit="return confirm('Supprimer « {{ p.name }} » ?')">
+                <button type="submit" class="btn btn-sm btn-outline-danger" title="Supprimer">🗑️</button>
+              </form>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="alert alert-info small mb-4">Aucun produit enregistré. Ajoutez vos produits ci-dessous.</div>
+  {% endif %}
+
+  <!-- Formulaire d'ajout style "phrase" -->
+  <h6 class="fw-bold mb-3">➕ Ajouter un produit depuis l'étiquette</h6>
+  <form action="{{ url_for('add_product') }}" method="post" class="add-product-form">
+
+    <!-- Phrase ligne 1 : Pour [augmenter/baisser] [paramètre] de [X ppm] dans [Y m3]… -->
+    <div class="product-phrase p-3 rounded mb-3" class="zone-phrase" style="line-height:2.6; font-size:0.95rem;">
+
+      <span class="fw-semibold">Pour</span>
+
+      <select name="direction" class="form-select form-select-sm d-inline-block phrase-select" style="width:120px;" id="new-direction">
+        <option value="up">augmenter</option>
+        <option value="down">baisser</option>
+      </select>
+
+      <select name="parameter" class="form-select form-select-sm d-inline-block phrase-select" style="width:115px;" id="new-parameter">
+        <option value="alkalinity">le TAC</option>
+        <option value="ph">le pH</option>
+        <option value="hardness">le TH</option>
+        <option value="bromine">le Brome</option>
+      </select>
+
+      <span>de</span>
+
+      <input type="number" name="ref_change" class="form-control form-control-sm d-inline-block"
+             style="width:80px;" step="0.01" min="0.01" placeholder="10" required>
+
+      <span id="new-change-unit" class="fw-semibold text-primary">ppm</span>
+
+      <span>dans</span>
+
+      <input type="number" name="ref_volume" class="form-control form-control-sm d-inline-block"
+             style="width:80px;" step="0.1" min="0.1" placeholder="100" required>
+
+      <select name="ref_volume_unit" class="form-select form-select-sm d-inline-block phrase-select" style="width:75px;">
+        <option value="m3">m³</option>
+        <option value="L">L</option>
+      </select>
+
+      <span>,</span><br>
+
+      <span class="fw-semibold">ajouter</span>
+
+      <input type="number" name="ref_dose" class="form-control form-control-sm d-inline-block"
+             style="width:80px;" step="0.001" min="0.001" placeholder="1.8" required>
+
+      <select name="ref_dose_unit" class="form-select form-select-sm d-inline-block phrase-select" style="width:75px;">
+        <option value="kg">kg</option>
+        <option value="g">g</option>
+        <option value="L">L</option>
+        <option value="ml">ml</option>
+      </select>
+
+      <span>de</span>
+
+      <input type="text" name="name" class="form-control form-control-sm d-inline-block"
+             style="width:260px;" placeholder="Nom du produit (ex: Bicarbonate de sodium)" required>
+
+      <span class="ms-3">— attendre</span>
+      <input type="number" name="wait_hours" class="form-control form-control-sm d-inline-block"
+             style="width:65px;" step="1" min="1" max="72" value="6" required>
+      <span>h avant retest</span>
+
+      <button type="submit" class="btn btn-pool btn-sm ms-2">💾 Enregistrer</button>
+    </div>
+
+    <div class="mt-2 d-flex align-items-center gap-2 flex-wrap">
+      <label class="form-label mb-0 text-muted small">🛒 Lien d'achat (optionnel) :</label>
+      <input type="url" name="buy_url" class="form-control form-control-sm"
+             style="max-width:400px;" placeholder="https://…">
+    </div>
+
+    <div class="text-muted small">
+      💡 Exemple : <em>"Pour augmenter le TAC de <strong>10 ppm</strong> dans <strong>100 m³</strong>,
+      ajouter <strong>1,8 kg</strong> de <strong>Bicarbonate de sodium</strong>"</em>
+    </div>
+
+  </form>
+</div>
+
+<!-- ── Modale d'édition produit ─────────────────────────────────────────────── -->
+<div class="modal fade" id="editProductModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content" style="border-radius:16px; border:none; overflow:hidden;">
+      <div class="modal-header" style="background:linear-gradient(135deg,#023e8a,#0077b6); color:#fff; border:none;">
+        <h5 class="modal-title">✏️ Modifier le produit</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <form id="editProductForm" method="post">
+        <div class="modal-body p-4">
+
+          <div class="mb-3">
+            <label class="form-label fw-semibold">Nom du produit</label>
+            <input type="text" class="form-control" name="name" id="ep-name" required
+                   placeholder="Ex: Bicarbonate de sodium">
+          </div>
+
+          <div class="row g-3 mb-4">
+            <div class="col-md-4">
+              <label class="form-label fw-semibold">Paramètre</label>
+              <select class="form-select" name="parameter" id="ep-parameter" required>
+                <option value="alkalinity">⚗️ Alcalinité (TAC)</option>
+                <option value="ph">💧 pH</option>
+                <option value="hardness">🪨 Dureté (TH)</option>
+                <option value="bromine">🧪 Brome</option>
+              </select>
+            </div>
+            <div class="col-md-4">
+              <label class="form-label fw-semibold">Direction</label>
+              <select class="form-select" name="direction" id="ep-direction" required>
+                <option value="up">⬆ Hausse (augmente)</option>
+                <option value="down">⬇ Baisse (diminue)</option>
+              </select>
+            </div>
+          </div>
+
+          <label class="form-label fw-semibold">Dosage indiqué sur l'étiquette</label>
+          <div class="product-phrase p-3 rounded" class="zone-phrase" style="line-height:2.8; font-size:0.95rem;">
+            <input type="number" class="form-control form-control-sm d-inline-block"
+                   style="width:80px;" name="ref_dose" id="ep-ref_dose" step="0.001" min="0.001" required>
+            <select class="form-select form-select-sm d-inline-block phrase-select" style="width:75px;" name="ref_dose_unit" id="ep-ref_dose_unit">
+              <option value="kg">kg</option>
+              <option value="g">g</option>
+              <option value="L">L</option>
+              <option value="ml">ml</option>
+            </select>
+            <span>pour</span>
+            <span id="ep-direction-sign" class="fw-semibold text-success">+</span>
+            <input type="number" class="form-control form-control-sm d-inline-block"
+                   style="width:80px;" name="ref_change" id="ep-ref_change" step="0.01" min="0.01" required>
+            <span id="ep-change-unit" class="fw-semibold text-primary">ppm</span>
+            <span>dans</span>
+            <input type="number" class="form-control form-control-sm d-inline-block"
+                   style="width:80px;" name="ref_volume" id="ep-ref_volume" step="0.1" min="0.1" required>
+            <select class="form-select form-select-sm d-inline-block phrase-select" style="width:75px;" name="ref_volume_unit" id="ep-ref_volume_unit">
+              <option value="m3">m³</option>
+              <option value="L">L</option>
+            </select>
+          </div>
+
+          <div class="mt-3">
+            <label class="form-label fw-semibold">⏱️ Délai avant retest (heures)</label>
+            <div class="input-group" style="max-width:200px;">
+              <input type="number" class="form-control" name="wait_hours" id="ep-wait_hours"
+                     step="1" min="1" max="72" value="6" required>
+              <span class="input-group-text">h</span>
+            </div>
+            <div class="form-text">Durée recommandée avant de retester après ce produit.</div>
+          </div>
+
+          <div class="mt-3">
+            <label class="form-label fw-semibold">🛒 Lien d'achat (optionnel)</label>
+            <input type="url" class="form-control" name="buy_url" id="ep-buy_url"
+                   placeholder="https://…">
+            <div class="form-text">URL vers la page d'achat du produit.</div>
+          </div>
+
+        </div><!-- fin modal-body -->
+        <div class="modal-footer" style="border-top:1px solid #e9ecef;">
+          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Annuler</button>
+          <button type="submit" class="btn btn-pool">💾 Sauvegarder</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+// ── Données produits ──────────────────────────────────────────────────────────
+const PRODUCTS = {{ products | tojson }};
+let poolVolumeL = {{ pool_volume }};
+
+const PARAM_INFO = {
+  alkalinity: { changeUnit: 'ppm', step: 1  },
+  ph:         { changeUnit: 'pH',  step: 0.1 },
+  hardness:   { changeUnit: 'ppm', step: 1  },
+  bromine:    { changeUnit: 'ppm', step: 1  },
+};
+
+// ── Initialisation ────────────────────────────────────────────────────────────
+let _volumeSaveTimer;
+document.getElementById('pool-volume').addEventListener('input', function () {
+  poolVolumeL = parseFloat(this.value) || 0;
+  document.getElementById('pool-volume-m3').textContent = (poolVolumeL / 1000).toFixed(1);
+  recalcAll();
+
+  // Persistance debouncée du volume
+  clearTimeout(_volumeSaveTimer);
+  _volumeSaveTimer = setTimeout(() => {
+    if (poolVolumeL >= 100) {
+      fetch('/api/pool-volume', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ volume: poolVolumeL }),
+      }).catch(() => {});
+    }
+  }, 800);
+});
+
+document.querySelectorAll('.calc-current, .calc-target').forEach(inp => {
+  inp.addEventListener('input', () => {
+    refreshProductSelect(inp.dataset.param);
+    recalc(inp.dataset.param);
+  });
+});
+
+document.querySelectorAll('.calc-product').forEach(sel => {
+  sel.addEventListener('change', () => recalc(sel.dataset.param));
+});
+
+document.querySelectorAll('.btn-ideal').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const p = btn.dataset.param;
+    document.querySelector(`.calc-target[data-param="${p}"]`).value = btn.dataset.ideal;
+    refreshProductSelect(p);
+    recalc(p);
+  });
+});
+
+document.querySelectorAll('.btn-last').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const p = btn.dataset.param;
+    document.querySelector(`.calc-current[data-param="${p}"]`).value = btn.dataset.last;
+    refreshProductSelect(p);
+    recalc(p);
+  });
+});
+
+// Unité de variation dynamique selon le paramètre sélectionné
+document.getElementById('new-parameter').addEventListener('change', function () {
+  document.getElementById('new-change-unit').textContent =
+    this.value === 'ph' ? 'pH' : 'ppm';
+});
+
+// ── Peupler les selects produits ──────────────────────────────────────────────
+function refreshProductSelect(param) {
+  const currentVal = parseFloat(document.querySelector(`.calc-current[data-param="${param}"]`).value);
+  const targetVal  = parseFloat(document.querySelector(`.calc-target[data-param="${param}"]`).value);
+  const sel        = document.querySelector(`.calc-product[data-param="${param}"]`);
+  const prevId     = sel.value;
+
+  const direction = (!isNaN(currentVal) && !isNaN(targetVal))
+    ? (targetVal > currentVal ? 'up' : 'down')
+    : null;
+
+  const matching = PRODUCTS.filter(
+    p => p.parameter === param && (direction === null || p.direction === direction)
+  );
+
+  sel.innerHTML = '';
+
+  if (matching.length === 0) {
+    // Aucun produit disponible pour ce param / cette direction
+    const allForParam = PRODUCTS.filter(p => p.parameter === param);
+    const placeholder = allForParam.length > 0
+      ? `— Aucun produit ${direction === 'up' ? 'haussier' : 'baissier'} pour ce paramètre —`
+      : '— Aucun produit enregistré —';
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.disabled = true;
+    opt.selected = true;
+    opt.textContent = placeholder;
+    sel.appendChild(opt);
+    sel.disabled = true;
+  } else {
+    sel.disabled = false;
+    const def = document.createElement('option');
+    def.value = '';
+    def.textContent = '— Sélectionner un produit —';
+    sel.appendChild(def);
+    matching.forEach(p => {
+      const opt = document.createElement('option');
+      opt.value = p.id;
+      const cu = p.parameter === 'ph' ? 'pH' : 'ppm';
+      opt.textContent = `${p.name}  (${p.ref_dose} ${p.ref_dose_unit} / ${p.ref_change} ${cu} / ${p.ref_volume} ${p.ref_volume_unit})`;
+      if (String(p.id) === prevId) opt.selected = true;
+      sel.appendChild(opt);
+    });
+  }
+
+  // Info du produit sélectionné
+  const infoEl = document.querySelector(`.calc-product-info[data-param="${param}"]`);
+  const prod = PRODUCTS.find(p => String(p.id) === sel.value);
+  infoEl.textContent = prod
+    ? `Étiquette : ${prod.ref_dose} ${prod.ref_dose_unit} pour ${prod.direction === 'up' ? '+' : '−'}${prod.ref_change} ${PARAM_INFO[param].changeUnit} dans ${prod.ref_volume} ${prod.ref_volume_unit}`
+    : '';
+
+  // Exposer si le select est vide (utilisé dans recalc)
+  sel.dataset.empty = matching.length === 0 ? '1' : '0';
+}
+
+// ── Calcul ────────────────────────────────────────────────────────────────────
+// La formule de dosage vit uniquement côté Python (/api/calculate).
+// Le JS gère uniquement l'état de l'interface et déclenche l'appel API.
+
+function recalcAll() {
+  Object.keys(PARAM_INFO).forEach(recalc);
+}
+
+const _calcTimers = {};
+
+function recalc(param) {
+  const currentVal = parseFloat(document.querySelector(`.calc-current[data-param="${param}"]`).value);
+  const targetVal  = parseFloat(document.querySelector(`.calc-target[data-param="${param}"]`).value);
+  const sel        = document.querySelector(`.calc-product[data-param="${param}"]`);
+  const resultDiv    = document.querySelector(`.calc-result[data-param="${param}"]`);
+  const loadingDiv   = document.querySelector(`.calc-loading[data-param="${param}"]`);
+  const noChgDiv     = document.querySelector(`.calc-no-change[data-param="${param}"]`);
+  const hintDiv      = document.querySelector(`.calc-hint[data-param="${param}"]`);
+  const noProdDiv    = document.querySelector(`.calc-no-product[data-param="${param}"]`);
+  const arrowEl      = document.querySelector(`.calc-arrow[data-param="${param}"]`);
+  const badgeEl      = document.querySelector(`.calc-direction-badge[data-param="${param}"]`);
+
+  // Flèche directionnelle (synchrone)
+  if (!isNaN(currentVal) && !isNaN(targetVal)) {
+    const diff = targetVal - currentVal;
+    if (diff > 0)      { arrowEl.textContent = '⬆'; arrowEl.style.color = 'var(--yellow-warn)'; }
+    else if (diff < 0) { arrowEl.textContent = '⬇'; arrowEl.style.color = 'var(--red-bad)'; }
+    else               { arrowEl.textContent = '✓';  arrowEl.style.color = 'var(--green-ok)'; }
+  } else {
+    arrowEl.textContent = '→'; arrowEl.style.color = '';
+  }
+
+  resultDiv.style.display  = 'none';
+  loadingDiv.style.display = 'none';
+  noChgDiv.style.display   = 'none';
+  hintDiv.style.display    = 'none';
+  noProdDiv.style.display  = 'none';
+  badgeEl.textContent      = '';
+  badgeEl.className        = 'ms-auto badge calc-direction-badge';
+
+  if (isNaN(currentVal) || isNaN(targetVal)) {
+    // Montrer l'état vide produit dès le chargement si aucun produit
+    if (sel.dataset.empty === '1') noProdDiv.style.display = 'block';
+    return;
+  }
+
+  const change = targetVal - currentVal;
+  if (Math.abs(change) < 1e-9) {
+    noChgDiv.style.display = 'block';
+    badgeEl.textContent    = '✅ OK';
+    badgeEl.className      = 'ms-auto badge bg-success calc-direction-badge';
+    return;
+  }
+
+  if (sel.dataset.empty === '1') { noProdDiv.style.display = 'block'; return; }
+  if (!sel.value) { hintDiv.style.display = 'block'; return; }
+
+  // Appel API debouncé — la formule de dosage est calculée côté Python uniquement
+  loadingDiv.style.display = 'block';
+  clearTimeout(_calcTimers[param]);
+  _calcTimers[param] = setTimeout(async () => {
+    try {
+      const resp = await fetch('/api/calculate', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({
+          product_id:    parseInt(sel.value),
+          current_value: currentVal,
+          target_value:  targetVal,
+          pool_volume_l: poolVolumeL,
+        }),
+      });
+      loadingDiv.style.display = 'none';
+      if (!resp.ok) return;
+      const data = await resp.json();
+      if (!data.ok || data.no_change) return;
+
+      resultDiv.querySelector('.result-icon').textContent  = data.icon;
+      resultDiv.querySelector('.result-dose').textContent  = data.display_dose;
+      resultDiv.querySelector('.result-unit').textContent  = data.display_unit;
+      resultDiv.querySelector('.result-detail').textContent = data.detail;
+
+      badgeEl.textContent = data.direction === 'up' ? '⬆ Hausse' : '⬇ Baisse';
+      badgeEl.className   = `ms-auto badge calc-direction-badge ${data.direction === 'up' ? 'bg-warning text-dark' : 'bg-danger'}`;
+
+      resultDiv.style.display = 'block';
+    } catch (e) {
+      loadingDiv.style.display = 'none';
+      console.error('Erreur calcul :', e);
+    }
+  }, 250);
+}
+
+// ── Modale édition produit ────────────────────────────────────────────────────
+const editProductModal = new bootstrap.Modal(document.getElementById('editProductModal'));
+let editProductDirty = false;
+
+document.querySelectorAll('#editProductForm input, #editProductForm select').forEach(el => {
+  el.addEventListener('input',  () => { editProductDirty = true; });
+  el.addEventListener('change', () => { editProductDirty = true; });
+});
+document.getElementById('editProductForm').addEventListener('submit', () => { editProductDirty = false; });
+document.getElementById('editProductModal').addEventListener('hide.bs.modal', e => {
+  if (editProductDirty && !confirm('Des modifications non sauvegardées seront perdues.\n\nFermer quand même ?')) {
+    e.preventDefault();
+  }
+});
+
+// Mise à jour dynamique du signe et de l'unité dans la modale
+function updateEditModalLabels() {
+  const param = document.getElementById('ep-parameter').value;
+  const dir   = document.getElementById('ep-direction').value;
+  document.getElementById('ep-change-unit').textContent    = param === 'ph' ? 'pH' : 'ppm';
+  document.getElementById('ep-direction-sign').textContent = dir === 'up' ? '+' : '−';
+  document.getElementById('ep-direction-sign').className   =
+    'fw-semibold ' + (dir === 'up' ? 'text-success' : 'text-danger');
+}
+document.getElementById('ep-parameter').addEventListener('change', updateEditModalLabels);
+document.getElementById('ep-direction').addEventListener('change', updateEditModalLabels);
+
+document.querySelectorAll('.btn-edit-product').forEach(btn => {
+  btn.addEventListener('click', async () => {
+    const id = btn.dataset.id;
+    try {
+      const r = await fetch(`/products/edit/${id}`);
+      if (!r.ok) throw new Error('Produit introuvable');
+      const p = await r.json();
+
+      document.getElementById('ep-name').value             = p.name;
+      document.getElementById('ep-parameter').value        = p.parameter;
+      document.getElementById('ep-direction').value        = p.direction;
+      document.getElementById('ep-ref_dose').value         = p.ref_dose;
+      document.getElementById('ep-ref_dose_unit').value    = p.ref_dose_unit;
+      document.getElementById('ep-ref_change').value       = p.ref_change;
+      document.getElementById('ep-ref_volume').value       = p.ref_volume;
+      document.getElementById('ep-ref_volume_unit').value  = p.ref_volume_unit;
+      document.getElementById('ep-wait_hours').value       = p.wait_hours ?? 6;
+      document.getElementById('ep-buy_url').value          = p.buy_url ?? '';
+
+      document.getElementById('editProductForm').action = `/products/edit/${id}`;
+      updateEditModalLabels();
+      editProductDirty = false;
+      editProductModal.show();
+    } catch (e) {
+      alert('Impossible de charger le produit : ' + e.message);
+    }
+  });
+});
+
+// ── Persistance localStorage ──────────────────────────────────────────────────
+const LS_PREFIX = 'pool-calc-';
+
+function lsSave(inp) {
+  const key = LS_PREFIX + inp.dataset.param + '-' + (inp.classList.contains('calc-current') ? 'cur' : 'tgt');
+  if (inp.value !== '') localStorage.setItem(key, inp.value);
+  else                  localStorage.removeItem(key);
+}
+
+function lsRestore() {
+  document.querySelectorAll('.calc-current, .calc-target').forEach(inp => {
+    // Ne pas écraser une valeur déjà pré-remplie (dernière mesure)
+    if (inp.value !== '') return;
+    const key = LS_PREFIX + inp.dataset.param + '-' + (inp.classList.contains('calc-current') ? 'cur' : 'tgt');
+    const saved = localStorage.getItem(key);
+    if (saved !== null) inp.value = saved;
+  });
+}
+
+document.querySelectorAll('.calc-current, .calc-target').forEach(inp => {
+  inp.addEventListener('input', () => lsSave(inp));
+});
+
+// ── Réinitialiser tous les champs ─────────────────────────────────────────────
+document.getElementById('btn-reset-calc')?.addEventListener('click', () => {
+  document.querySelectorAll('.calc-current, .calc-target').forEach(inp => {
+    inp.value = '';
+    localStorage.removeItem(LS_PREFIX + inp.dataset.param + '-' + (inp.classList.contains('calc-current') ? 'cur' : 'tgt'));
+  });
+  Object.keys(PARAM_INFO).forEach(p => { refreshProductSelect(p); recalc(p); });
+});
+
+// ── Init au chargement ────────────────────────────────────────────────────────
+lsRestore();
+Object.keys(PARAM_INFO).forEach(param => {
+  refreshProductSelect(param);
+  recalc(param);
+});
+</script>
+{% endblock %}
