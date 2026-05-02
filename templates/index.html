@@ -223,10 +223,10 @@
             {% endif %}
             {% if t.notes %}<div class="text-muted" style="font-size:0.78rem;">{{ t.notes }}</div>{% endif %}
           </div>
-          <form action="{{ url_for('delete_treatment', id=t.id) }}" method="post"
-                onsubmit="return confirm('Supprimer ce traitement ?')">
-            <button type="submit" class="btn btn-sm btn-outline-secondary py-0 px-2" title="Supprimer">✕</button>
-          </form>
+          <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-2 btn-delete-treatment"
+                  data-url="{{ url_for('delete_treatment', id=t.id) }}"
+                  data-label="{{ t.product_name | e }}"
+                  title="Supprimer ce traitement">✕</button>
         </div>
       </div>
       {% endfor %}
@@ -358,6 +358,26 @@
 
   </div><!-- fin col-lg-7 -->
 
+</div>
+<!-- ── Modale suppression traitement ───────────────────────────────────────── -->
+<div class="modal fade" id="deleteTreatmentModal" tabindex="-1" aria-labelledby="deleteTreatmentLabel" aria-hidden="true">
+  <div class="modal-dialog modal-sm">
+    <div class="modal-content">
+      <div class="modal-header bg-secondary text-white border-0">
+        <h5 class="modal-title" id="deleteTreatmentLabel">Supprimer ce traitement ?</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body small">
+        <strong id="delete-treatment-label"></strong>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Annuler</button>
+        <form id="delete-treatment-form" method="post" class="d-inline">
+          <button type="submit" class="btn btn-secondary btn-sm">✕ Supprimer</button>
+        </form>
+      </div>
+    </div>
+  </div>
 </div>
 {% endblock %}
 
@@ -493,6 +513,20 @@ document.getElementById('photo-input')?.addEventListener('change', function () {
     if (!name.value.trim()) { showError(name, 'Le nom du produit est requis.'); ok = false; }
     if (!param.value)        { showError(param, 'Sélectionnez un paramètre.');   ok = false; }
     if (!ok) { e.preventDefault(); name.value.trim() ? param.focus() : name.focus(); }
+  });
+})();
+
+// ── Modale suppression traitement ────────────────────────────────────────────
+(function () {
+  const modal = new bootstrap.Modal(document.getElementById('deleteTreatmentModal'));
+  const form  = document.getElementById('delete-treatment-form');
+  const lbl   = document.getElementById('delete-treatment-label');
+  document.querySelectorAll('.btn-delete-treatment').forEach(btn => {
+    btn.addEventListener('click', () => {
+      lbl.textContent = btn.dataset.label;
+      form.action = btn.dataset.url;
+      modal.show();
+    });
   });
 })();
 

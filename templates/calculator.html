@@ -8,16 +8,37 @@
     <h1>🧮 Calculateur de produits</h1>
     <p>Entrez les valeurs de votre dosage étiquette, les résultats se calculent en temps réel.</p>
   </div>
-  <button type="button" class="btn btn-outline-secondary btn-sm" id="btn-reset-calc" title="Remettre tous les champs à zéro">
+  <button type="button" class="btn btn-outline-secondary btn-sm"
+          data-bs-toggle="modal" data-bs-target="#resetCalcModal"
+          title="Remettre tous les champs à zéro">
     🔄 Réinitialiser
   </button>
+</div>
+
+<!-- Modal confirmation réinitialisation -->
+<div class="modal fade" id="resetCalcModal" tabindex="-1" aria-labelledby="resetCalcModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-sm modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h6 class="modal-title" id="resetCalcModalLabel">🔄 Réinitialiser le calculateur</h6>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body small">
+        Tous les champs et les valeurs mémorisées seront effacés. Continuer ?
+      </div>
+      <div class="modal-footer py-2">
+        <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Annuler</button>
+        <button type="button" class="btn btn-secondary btn-sm" id="btn-reset-calc-confirm">🔄 Réinitialiser</button>
+      </div>
+    </div>
+  </div>
 </div>
 
 <!-- ── Volume piscine ────────────────────────────────────────────────────────── -->
 <div class="settings-section d-flex align-items-center gap-3 flex-wrap mb-4 py-3">
   <span>🏊 <strong>Volume de ma piscine :</strong></span>
   <div class="input-group" style="width:200px;">
-    <input type="number" id="pool-volume" class="form-control" value="{{ pool_volume }}" min="100" step="100">
+    <input type="number" id="pool-volume" class="form-control" value="{{ pool_volume }}" min="100" step="1">
     <span class="input-group-text">litres</span>
   </div>
   <span class="text-muted small">= <span id="pool-volume-m3">{{ (pool_volume/1000)|round(1) }}</span> m³ — les doses se recalculent automatiquement.</span>
@@ -115,7 +136,7 @@
       </div>
 
       <!-- Résultat -->
-      <div class="calc-result" data-param="{{ key }}" style="display:none;">
+      <div class="calc-result" data-param="{{ key }}" style="display:none;" aria-live="polite" aria-atomic="true">
         <div class="result-box d-flex align-items-center gap-3 p-3 rounded">
           <div class="result-icon fs-2"></div>
           <div class="flex-grow-1">
@@ -284,7 +305,7 @@
 
       <span class="ms-3">— attendre</span>
       <input type="number" name="wait_hours" class="form-control form-control-sm d-inline-block"
-             style="width:65px;" step="1" min="1" max="72" value="6" required>
+             style="width:65px;" step="0.5" min="0.5" max="72" value="6" required>
       <span>h avant retest</span>
 
       <button type="submit" class="btn btn-pool btn-sm ms-2">💾 Enregistrer</button>
@@ -368,7 +389,7 @@
             <label class="form-label fw-semibold">⏱️ Délai avant retest (heures)</label>
             <div class="input-group" style="max-width:200px;">
               <input type="number" class="form-control" name="wait_hours" id="ep-wait_hours"
-                     step="1" min="1" max="72" value="6" required>
+                     step="0.5" min="0.5" max="72" value="6" required>
               <span class="input-group-text">h</span>
             </div>
             <div class="form-text">Durée recommandée avant de retester après ce produit.</div>
@@ -583,6 +604,7 @@ function recalc(param) {
       const resp = await fetch('/api/calculate', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal:  AbortSignal.timeout(5000),
         body:    JSON.stringify({
           product_id:    parseInt(sel.value),
           current_value: currentVal,
@@ -691,12 +713,13 @@ document.querySelectorAll('.calc-current, .calc-target').forEach(inp => {
 });
 
 // ── Réinitialiser tous les champs ─────────────────────────────────────────────
-document.getElementById('btn-reset-calc')?.addEventListener('click', () => {
+document.getElementById('btn-reset-calc-confirm')?.addEventListener('click', () => {
   document.querySelectorAll('.calc-current, .calc-target').forEach(inp => {
     inp.value = '';
     localStorage.removeItem(LS_PREFIX + inp.dataset.param + '-' + (inp.classList.contains('calc-current') ? 'cur' : 'tgt'));
   });
   Object.keys(PARAM_INFO).forEach(p => { refreshProductSelect(p); recalc(p); });
+  bootstrap.Modal.getInstance(document.getElementById('resetCalcModal'))?.hide();
 });
 
 // ── Init au chargement ────────────────────────────────────────────────────────

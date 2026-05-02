@@ -69,6 +69,8 @@
         <button type="button" class="btn btn-sm btn-outline-warning" id="btn-filter-issues"
                 title="Afficher uniquement les lignes avec des valeurs hors norme">
           ⚠️ Hors norme
+          <span class="badge bg-warning text-dark ms-1" id="issues-count-badge" style="display:none;" aria-label="lignes hors norme"></span>
+          <span class="badge bg-secondary text-white ms-1" id="issues-hidden-badge" style="display:none;" aria-label="lignes ok cachées"></span>
         </button>
       </div>
 
@@ -147,6 +149,11 @@
   </div>
 
 </div>
+{% if table_truncated %}
+<p class="text-muted small text-end mt-1 mb-0">
+  📊 Les graphiques ci-dessus portent sur <strong>toutes les {{ total_count }} mesures</strong>, quelle que soit la limite du tableau.
+</p>
+{% endif %}
 
 <!-- ── Bilan des traitements ─────────────────────────────────────────────────── -->
 {% if correlations %}
@@ -382,10 +389,10 @@
             <div class="d-flex gap-1">
               <button type="button" class="btn btn-sm btn-outline-primary btn-edit" title="Modifier"
                       data-id="{{ m.id }}">✏️</button>
-              <form action="{{ url_for('delete_measurement', id=m.id) }}" method="post"
-                    onsubmit="return confirm('Supprimer cette mesure ?')">
-                <button type="submit" class="btn btn-sm btn-outline-danger" title="Supprimer">🗑️</button>
-              </form>
+              <button type="button" class="btn btn-sm btn-outline-danger btn-delete-measure"
+                      data-url="{{ url_for('delete_measurement', id=m.id) }}"
+                      data-date="{{ m.measured_at[:16].replace('T',' ') }}"
+                      title="Supprimer">🗑️</button>
             </div>
           </td>
         </tr>
@@ -483,6 +490,28 @@
           <button type="submit" class="btn btn-pool">💾 Sauvegarder</button>
         </div>
       </form>
+    </div>
+  </div>
+</div>
+
+<!-- ── Modale suppression mesure ───────────────────────────────────────────── -->
+<div class="modal fade" id="deleteModal" tabindex="-1" aria-labelledby="deleteModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-sm">
+    <div class="modal-content">
+      <div class="modal-header bg-danger text-white border-0">
+        <h5 class="modal-title" id="deleteModalLabel">🗑️ Supprimer cette mesure ?</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <p class="mb-2 small">Mesure du <strong id="delete-modal-date"></strong></p>
+        <div class="alert alert-warning py-2 px-3 small mb-0">⚠️ Action irréversible.</div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Annuler</button>
+        <form id="delete-measure-form" method="post" class="d-inline">
+          <button type="submit" class="btn btn-danger btn-sm">🗑️ Supprimer</button>
+        </form>
+      </div>
     </div>
   </div>
 </div>
@@ -889,18 +918,53 @@ document.querySelectorAll('.btn-edit').forEach(btn => {
   });
 });
 
+// ── Modale suppression mesure ────────────────────────────────────────────────
+(function () {
+  const modal    = new bootstrap.Modal(document.getElementById('deleteModal'));
+  const form     = document.getElementById('delete-measure-form');
+  const dateSpan = document.getElementById('delete-modal-date');
+  document.querySelectorAll('.btn-delete-measure').forEach(btn => {
+    btn.addEventListener('click', () => {
+      dateSpan.textContent = btn.dataset.date;
+      form.action = btn.dataset.url;
+      modal.show();
+    });
+  });
+})();
+
 // ── Filtre "hors norme" ───────────────────────────────────────────────────────
 (function () {
-  const btn  = document.getElementById('btn-filter-issues');
+  const btn         = document.getElementById('btn-filter-issues');
   if (!btn) return;
+  const countBadge  = document.getElementById('issues-count-badge');
+  const hiddenBadge = document.getElementById('issues-hidden-badge');
+  const rows        = Array.from(document.querySelectorAll('table.table-pool tbody tr'));
+  const issueRows   = rows.filter(r => r.dataset.allOk === 'false');
+  const okRows      = rows.filter(r => r.dataset.allOk === 'true');
+
+  // Badge permanent : nombre de lignes hors norme
+  if (issueRows.length > 0) {
+    countBadge.textContent = issueRows.length;
+    countBadge.style.display = '';
+  }
+
   let active = false;
   btn.addEventListener('click', () => {
     active = !active;
     btn.classList.toggle('btn-warning',         active);
     btn.classList.toggle('btn-outline-warning', !active);
-    document.querySelectorAll('table.table-pool tbody tr').forEach(row => {
+
+    rows.forEach(row => {
       row.style.display = active && row.dataset.allOk === 'true' ? 'none' : '';
     });
+
+    // Badge dynamique : lignes ok masquées
+    if (active && okRows.length > 0) {
+      hiddenBadge.textContent = `${okRows.length} cachée${okRows.length > 1 ? 's' : ''}`;
+      hiddenBadge.style.display = '';
+    } else {
+      hiddenBadge.style.display = 'none';
+    }
   });
 })();
 </script>
