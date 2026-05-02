@@ -12,6 +12,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta
 
 import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import requests
 from flask import (Flask, Response, flash, jsonify, redirect, render_template,
@@ -25,7 +26,96 @@ from recommendations import IDEAL_RANGES, get_recommendations, get_status
 
 app = Flask(__name__)
 
-_SECRET_KEY_FILE = os.path.join(os.path.dirname(__file__), '.secret_key')
+_SECRET_KEY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.secret_key')
+_ENV_FILE        = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
+_DEFAULT_PORT    = 5124
+
+
+def _load_dotenv() -> None:
+    """Charge .env dans os.environ pour les clés non encore définies.
+    Utile en run direct (python app.py) ; systemd peuple déjà l'env via EnvironmentFile."""
+    if not os.path.isfile(_ENV_FILE):
+        return
+    try:
+        with open(_ENV_FILE) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#') or '=' not in line:
+                    continue
+                k, _, v = line.partition('=')
+                k = k.strip()
+                if k and k not in os.environ:
+                    os.environ[k] = v.strip()
+    except OSError:
+        pass
+
+
+_load_dotenv()
+
+
+def _get_env_port() -> int:
+    """Lit PORT dans .env (valeur active après prochain redémarrage)."""
+    if os.path.isfile(_ENV_FILE):
+        try:
+            with open(_ENV_FILE) as f:
+                for line in f:
+                    if line.strip().startswith('PORT='):
+                        return int(line.partition('=')[2].strip())
+        except (OSError, ValueError):
+            pass
+    return _DEFAULT_PORT
+
+
+def _save_env_port(port: int) -> None:
+    """Met à jour ou insère PORT=<port> dans .env."""
+    lines: list[str] = []
+    found = False
+    if os.path.isfile(_ENV_FILE):
+        with open(_ENV_FILE) as f:
+            for line in f:
+                if line.strip().startswith('PORT='):
+                    lines.append(f'PORT={port}\n')
+                    found = True
+                else:
+                    lines.append(line)
+    if not found:
+        lines.append(f'PORT={port}\n')
+    with open(_ENV_FILE, 'w') as f:
+        f.writelines(lines)
+    try:
+        os.chmod(_ENV_FILE, 0o640)
+    except OSError:
+        pass
+
+
+def _warn_if_secret_key_not_ignored() -> None:
+    """Vérifie que .secret_key est bien dans .gitignore avant de l'écrire sur disque.
+    N'est appelée qu'au premier démarrage (création du fichier). Avertit sur stderr
+    sans bloquer le démarrage — les déploiements sans git ne sont pas pénalisés."""
+    gitignore = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.gitignore')
+    if not os.path.isfile(gitignore):
+        print(
+            "[pool] AVERTISSEMENT : aucun .gitignore trouvé. Ajoutez '.secret_key' à votre "
+            ".gitignore avant de committer pour ne pas exposer la clé secrète.",
+            file=sys.stderr,
+        )
+        return
+    try:
+        with open(gitignore) as f:
+            lines = [l.strip() for l in f if l.strip() and not l.startswith('#')]
+    except OSError:
+        return
+    covered = any(
+        pat in ('.secret_key', '*.key', '*secret*', '.secret*')
+        for pat in lines
+    )
+    if not covered:
+        print(
+            "[pool] AVERTISSEMENT : '.secret_key' n'est pas dans .gitignore. "
+            "Ajoutez-le pour éviter de committer la clé secrète Flask.",
+            file=sys.stderr,
+        )
+
 
 def _load_secret_key() -> str:
     """Retourne la clé secrète dans cet ordre de priorité :
@@ -41,12 +131,16 @@ def _load_secret_key() -> str:
             return key
     # Premier démarrage sans clé configurée — génération automatique
     key = secrets.token_hex(32)
+    _warn_if_secret_key_not_ignored()
     try:
         with open(_SECRET_KEY_FILE, 'w') as f:
             f.write(key)
+        try:
+            os.chmod(_SECRET_KEY_FILE, 0o600)
+        except OSError:
+            pass
         print(
-            f"[pool] Clé secrète générée automatiquement → {_SECRET_KEY_FILE}\n"
-            "       Conservez ce fichier hors du dépôt (ajoutez .secret_key à .gitignore).",
+            f"[pool] Clé secrète générée automatiquement → {_SECRET_KEY_FILE}",
             file=sys.stderr,
         )
     except OSError as e:
@@ -55,16 +149,52 @@ def _load_secret_key() -> str:
 
 app.secret_key = _load_secret_key()
 
+_active_port: int = int(os.environ.get('PORT', _DEFAULT_PORT))
+
 DATABASE = os.path.join(os.path.dirname(__file__), 'pool.db')
 PHOTOS_DIR  = os.path.join(os.path.dirname(__file__), 'static', 'uploads')
 scheduler = BackgroundScheduler(daemon=True)
 
 app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB max par requête (photos)
 
-WAIT_HOURS = 6  # heures d'attente recommandées avant de retester après un traitement
+# Délai d'attente par défaut (heures) avant de retester l'eau après un traitement.
+# Utilisé uniquement quand le produit n'a pas de délai propre (champ wait_hours de la
+# table products). Pour ajuster par produit : Calculateur → fiche produit → "Délai avant retest".
+WAIT_HOURS = 6
 SCHEMA_VERSION = 12  # incrémenter à chaque nouvelle migration
 
 logger = logging.getLogger(__name__)
+
+_bg_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix='pool-bg')
+
+
+def _bg_submit(fn, *args):
+    """Soumet fn(*args) au pool de fond et logue toute exception non capturée."""
+    def _on_done(fut):
+        exc = fut.exception()
+        if exc:
+            logger.error('Tâche de fond %s a levé une exception : %s', fn.__name__, exc, exc_info=exc)
+    _bg_pool.submit(fn, *args).add_done_callback(_on_done)
+
+
+def _flash_error(user_msg: str, log_msg: str | None = None) -> None:
+    """Journalise l'exception courante et affiche un flash 'danger' à l'utilisateur."""
+    logger.exception(log_msg or user_msg)
+    flash(user_msg, 'danger')
+
+
+def _check_bearer_token(setting_key: str, fallback_token: str = ''):
+    """Valide le token Bearer (Authorization header ou fallback).
+    Retourne None si OK, sinon une réponse JSON 401 prête à retourner.
+    """
+    s        = get_settings()
+    expected = s.get(setting_key, '')
+    auth     = request.headers.get('Authorization', '')
+    token    = auth[7:].strip() if auth.startswith('Bearer ') else fallback_token
+    if not expected or not secrets.compare_digest(token, expected):
+        return jsonify({'error': 'Token invalide ou manquant'}), 401
+    return None
+
 
 # Liste des préfixes que le service worker ne doit pas mettre en cache.
 # Source unique — servie via /api/sw-skip-list pour éviter la désynchronisation.
@@ -139,8 +269,8 @@ def _send_critical_alert(measurement):
             "\n\n⚠️ Corrigez l'eau dès que possible."
         )
         send_telegram(token, chat_id, msg)
-    except Exception as exc:
-        print(f'[pool] _send_critical_alert error: {exc}', file=sys.stderr)
+    except Exception:
+        logger.exception('_send_critical_alert error')
 
 
 def _send_to_ha(measurement):
@@ -179,8 +309,8 @@ def _send_to_ha(measurement):
                 headers=headers,
                 timeout=5,
             )
-    except Exception as exc:
-        print(f'[pool] _send_to_ha error: {exc}', file=sys.stderr)
+    except Exception:
+        logger.exception('_send_to_ha error')
 
 
 # ─── Database ────────────────────────────────────────────────────────────────
@@ -398,9 +528,10 @@ def _m9_add_indexes(conn):
 
 def _m10_ha_push_settings(conn):
     for k, v in [
-        ('ha_push_url',     ''),
-        ('ha_push_token',   ''),
-        ('ha_push_enabled', 'true'),
+        ('ha_push_url',        ''),
+        ('ha_push_token',      ''),
+        ('ha_push_enabled',    'true'),
+        ('ha_rate_limit_s',    '60'),
     ]:
         conn.execute("INSERT OR IGNORE INTO settings VALUES (?, ?)", (k, v))
 
@@ -490,7 +621,8 @@ def _load_treatments_with_measurements(limit):
                 oldest_dt  = datetime.fromisoformat(oldest.replace(' ', 'T'))
                 meas_since = (oldest_dt - timedelta(days=365)).strftime('%Y-%m-%dT%H:%M:%S')
             except ValueError:
-                meas_since = '1970-01-01T00:00:00'
+                logger.warning('_load_treatments_with_measurements: date invalide %r, fallback = aujourd\'hui', oldest)
+                meas_since = (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%dT%H:%M:%S')
             measurements = [dict(r) for r in conn.execute(
                 'SELECT measured_at, ph, bromine, hardness, alkalinity '
                 'FROM measurements WHERE measured_at >= ? ORDER BY measured_at ASC',
@@ -511,7 +643,7 @@ def _find_value_before(measurements, param, ref_str):
 
 def get_active_treatments():
     """Traitements actifs enrichis : délais temporels + valeur mesurée avant traitement."""
-    treatments, measurements = _load_treatments_with_measurements(limit=30)
+    treatments, measurements = _load_treatments_with_measurements(limit=100)
     now    = datetime.now()
     result = []
     for t in treatments:
@@ -932,17 +1064,17 @@ def add_measurement():
                 'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
                 (measured_at, ph, bromine, hardness, alkalinity, temperature, notes, photo_path),
             )
+        _stats_cache.clear()
         flash('Mesure enregistrée avec succès !', 'success')
         _payload = {
             'measured_at': measured_at,
             'ph': ph, 'bromine': bromine,
             'hardness': hardness, 'alkalinity': alkalinity,
         }
-        threading.Thread(target=_send_critical_alert, args=(_payload,), daemon=True).start()
-        threading.Thread(target=_send_to_ha,          args=(_payload,), daemon=True).start()
+        _bg_submit(_send_critical_alert, _payload)
+        _bg_submit(_send_to_ha,          _payload)
     except Exception as exc:
-        logger.exception('Erreur enregistrement mesure')
-        flash('Erreur lors de l\'enregistrement. Vérifiez les valeurs saisies.', 'danger')
+        _flash_error('Erreur lors de l\'enregistrement. Vérifiez les valeurs saisies.', 'Erreur enregistrement mesure')
     return redirect(url_for('index'))
 
 
@@ -963,6 +1095,8 @@ def _history_filter_clause(period, from_date, to_date, col='measured_at'):
         return f'WHERE {col} >= ?', [cutoff]
     return '', []
 
+
+_stats_cache: dict = {}   # { last_measured_at: (monthly_stats, yoy_rows, curr_yr) }
 
 @app.route('/history')
 def history():
@@ -1002,36 +1136,43 @@ def history():
             temp_params
         ).fetchall()
         # Feature 16 — statistiques mensuelles (toujours sur la totalité des données)
-        monthly_rows = conn.execute('''
-            SELECT
-                strftime('%Y-%m', measured_at) AS month,
-                COUNT(*) AS cnt,
-                ROUND(AVG(ph),2) AS avg_ph,   ROUND(MIN(ph),2) AS min_ph,   ROUND(MAX(ph),2) AS max_ph,
-                ROUND(AVG(bromine),2) AS avg_br,  MIN(bromine) AS min_br,  MAX(bromine) AS max_br,
-                ROUND(AVG(hardness),1) AS avg_th,  MIN(hardness) AS min_th,  MAX(hardness) AS max_th,
-                ROUND(AVG(alkalinity),1) AS avg_tac, MIN(alkalinity) AS min_tac, MAX(alkalinity) AS max_tac
-            FROM measurements
-            WHERE ph IS NOT NULL OR bromine IS NOT NULL OR hardness IS NOT NULL OR alkalinity IS NOT NULL
-            GROUP BY month
-            ORDER BY month ASC
-        ''').fetchall()
-
-        # Comparaison N vs N-1
-        curr_yr  = datetime.now().year
-        yoy_rows = conn.execute('''
-            SELECT strftime('%m', measured_at)     AS month_num,
-                   strftime('%Y', measured_at)     AS year,
-                   ROUND(AVG(ph),         2)       AS avg_ph,
-                   ROUND(AVG(bromine),    2)       AS avg_br,
-                   ROUND(AVG(hardness),   1)       AS avg_th,
-                   ROUND(AVG(alkalinity), 1)       AS avg_tac
-            FROM measurements
-            WHERE strftime('%Y', measured_at) IN (?, ?)
-              AND (ph IS NOT NULL OR bromine IS NOT NULL
-                   OR hardness IS NOT NULL OR alkalinity IS NOT NULL)
-            GROUP BY year, month_num
-            ORDER BY year, month_num
-        ''', (str(curr_yr), str(curr_yr - 1))).fetchall()
+        # Utilise un cache invalidé dès qu'une nouvelle mesure est enregistrée
+        last_ts_row = conn.execute('SELECT MAX(measured_at) FROM measurements').fetchone()
+        last_ts     = last_ts_row[0] if last_ts_row else None
+        curr_yr     = datetime.now().year
+        cache_key   = (last_ts, curr_yr)
+        if cache_key not in _stats_cache:
+            monthly_rows = conn.execute('''
+                SELECT
+                    strftime('%Y-%m', measured_at) AS month,
+                    COUNT(*) AS cnt,
+                    ROUND(AVG(ph),2) AS avg_ph,   ROUND(MIN(ph),2) AS min_ph,   ROUND(MAX(ph),2) AS max_ph,
+                    ROUND(AVG(bromine),2) AS avg_br,  MIN(bromine) AS min_br,  MAX(bromine) AS max_br,
+                    ROUND(AVG(hardness),1) AS avg_th,  MIN(hardness) AS min_th,  MAX(hardness) AS max_th,
+                    ROUND(AVG(alkalinity),1) AS avg_tac, MIN(alkalinity) AS min_tac, MAX(alkalinity) AS max_tac
+                FROM measurements
+                WHERE ph IS NOT NULL OR bromine IS NOT NULL OR hardness IS NOT NULL OR alkalinity IS NOT NULL
+                GROUP BY month
+                ORDER BY month ASC
+            ''').fetchall()
+            yoy_rows = conn.execute('''
+                SELECT strftime('%m', measured_at)     AS month_num,
+                       strftime('%Y', measured_at)     AS year,
+                       ROUND(AVG(ph),         2)       AS avg_ph,
+                       ROUND(AVG(bromine),    2)       AS avg_br,
+                       ROUND(AVG(hardness),   1)       AS avg_th,
+                       ROUND(AVG(alkalinity), 1)       AS avg_tac
+                FROM measurements
+                WHERE strftime('%Y', measured_at) IN (?, ?)
+                  AND (ph IS NOT NULL OR bromine IS NOT NULL
+                       OR hardness IS NOT NULL OR alkalinity IS NOT NULL)
+                GROUP BY year, month_num
+                ORDER BY year, month_num
+            ''', (str(curr_yr), str(curr_yr - 1))).fetchall()
+            _stats_cache.clear()
+            _stats_cache[cache_key] = ([dict(r) for r in monthly_rows],
+                                       [dict(r) for r in yoy_rows])
+        monthly_rows_dicts, yoy_rows_dicts = _stats_cache[cache_key]
 
     measurements = [dict(r) for r in rows]
     for m in measurements:
@@ -1040,12 +1181,12 @@ def history():
             for param in ('ph', 'bromine', 'hardness', 'alkalinity')
             if m.get(param) is not None
         }
-    chart_data     = [dict(r) for r in chart_rows]
-    monthly_stats  = [dict(r) for r in monthly_rows]
+    chart_data      = [dict(r) for r in chart_rows]
+    monthly_stats   = monthly_rows_dicts
     table_truncated = total_count > TABLE_LIMIT
 
     yoy = {}
-    for row in [dict(r) for r in yoy_rows]:
+    for row in yoy_rows_dicts:
         y = row['year']
         yoy.setdefault(y, {})[row['month_num']] = row
 
@@ -1173,7 +1314,16 @@ def backup_import():
         flash(f"Version de backup incompatible (attendu : {BACKUP_VERSION}, reçu : {data.get('version')}).", 'danger')
         return redirect(url_for('settings_page') + '#backup')
 
+    # Valider la structure avant d'ouvrir la transaction — échoue vite sans toucher la DB
+    if not isinstance(data.get('measurements'), list) \
+            or not isinstance(data.get('products'), list) \
+            or not isinstance(data.get('treatments'), list):
+        flash('Structure de backup invalide (clés manquantes ou mauvais types).', 'danger')
+        return redirect(url_for('settings_page') + '#backup')
+
     try:
+        # get_db() est atomique : commit() en fin de bloc, rollback() sur exception.
+        # Si une INSERT échoue à mi-parcours, les DELETE précédents sont également annulés.
         with get_db() as conn:
             # ── Mesures ──────────────────────────────────────────────────────
             conn.execute('DELETE FROM measurements')
@@ -1223,8 +1373,7 @@ def backup_import():
         s = get_settings()
         setup_scheduler(s)
     except Exception as exc:
-        logger.exception('Erreur restauration backup')
-        flash('Erreur lors de la restauration. Le fichier est peut-être corrompu.', 'danger')
+        _flash_error('Erreur lors de la restauration. Le fichier est peut-être corrompu.', 'Erreur restauration backup')
 
     return redirect(url_for('settings_page') + '#backup')
 
@@ -1232,23 +1381,65 @@ def backup_import():
 @app.route('/settings', methods=['GET', 'POST'])
 def settings_page():
     if request.method == 'POST':
-        save_setting('telegram_token',   request.form.get('telegram_token', ''))
-        save_setting('telegram_chat_id', request.form.get('telegram_chat_id', ''))
-        save_setting('reminder_enabled', 'true' if request.form.get('reminder_enabled') else 'false')
-        save_setting('reminder_time',    request.form.get('reminder_time', '09:00'))
-        save_setting('reminder_days',    request.form.get('reminder_days', 'mon,wed,fri'))
-        save_setting('pool_volume',      request.form.get('pool_volume', '50000'))
-        save_setting('ha_sensor_name',   request.form.get('ha_sensor_name', ''))
-        save_setting('ha_push_url',      request.form.get('ha_push_url', '').rstrip('/'))
-        save_setting('ha_push_token',    request.form.get('ha_push_token', ''))
-        save_setting('ha_push_enabled',  'true' if request.form.get('ha_push_enabled') else 'false')
-        save_setting('reminder_weekly',  'true' if request.form.get('reminder_weekly') else 'false')
-        s = get_settings()
-        setup_scheduler(s)
-        flash('Paramètres sauvegardés !', 'success')
-        return redirect(url_for('settings_page'))
+        section = request.form.get('section', '')
 
-    return render_template('settings.html', settings=get_settings())
+        if section == 'piscine':
+            try:
+                vol = float(request.form.get('pool_volume') or 50000)
+                if vol < 100:
+                    vol = 50000.0
+            except (ValueError, TypeError):
+                vol = 50000.0
+            save_setting('pool_volume', str(vol))
+            flash('Volume de la piscine sauvegardé.', 'success')
+
+        elif section == 'serveur':
+            try:
+                new_port = int(request.form.get('app_port') or _DEFAULT_PORT)
+                if not (1024 <= new_port <= 65535):
+                    raise ValueError
+            except (ValueError, TypeError):
+                new_port = _DEFAULT_PORT
+            _save_env_port(new_port)
+            flash('Port sauvegardé. Redémarrez le service pour l\'appliquer.', 'success'
+                  if new_port == _active_port else 'warning')
+
+        elif section == 'telegram':
+            save_setting('telegram_token',   request.form.get('telegram_token', ''))
+            save_setting('telegram_chat_id', request.form.get('telegram_chat_id', ''))
+            flash('Paramètres Telegram sauvegardés.', 'success')
+
+        elif section == 'rappels':
+            save_setting('reminder_enabled', 'true' if request.form.get('reminder_enabled') else 'false')
+            save_setting('reminder_time',    request.form.get('reminder_time', '09:00'))
+            save_setting('reminder_days',    request.form.get('reminder_days', 'mon,wed,fri'))
+            save_setting('reminder_weekly',  'true' if request.form.get('reminder_weekly') else 'false')
+            setup_scheduler(get_settings())
+            flash('Rappels sauvegardés.', 'success')
+
+        elif section == 'ha':
+            save_setting('ha_sensor_name',  request.form.get('ha_sensor_name', ''))
+            save_setting('ha_push_url',     request.form.get('ha_push_url', '').rstrip('/'))
+            save_setting('ha_push_token',   request.form.get('ha_push_token', ''))
+            save_setting('ha_push_enabled', 'true' if request.form.get('ha_push_enabled') else 'false')
+            try:
+                rate_s = max(10, int(request.form.get('ha_rate_limit_s') or 60))
+            except (ValueError, TypeError):
+                rate_s = 60
+            save_setting('ha_rate_limit_s', str(rate_s))
+            flash('Paramètres Home Assistant sauvegardés.', 'success')
+
+        else:
+            flash('Section inconnue.', 'danger')
+            return redirect(url_for('settings_page'))
+
+        return redirect(url_for('settings_page') + f'#{section}')
+
+    return render_template('settings.html',
+        settings=get_settings(),
+        active_port=_active_port,
+        configured_port=_get_env_port(),
+    )
 
 
 @app.route('/test-telegram', methods=['POST'])
@@ -1312,29 +1503,21 @@ def edit_measurement(id):
             'ph': ph, 'bromine': bromine,
             'hardness': hardness, 'alkalinity': alkalinity,
         }
-        threading.Thread(target=_send_to_ha, args=(_edit_payload,), daemon=True).start()
+        _bg_submit(_send_to_ha, _edit_payload)
     except Exception as exc:
-        logger.exception('Erreur mise à jour mesure id=%s', id)
-        flash('Erreur lors de la mise à jour. Vérifiez les valeurs saisies.', 'danger')
+        _flash_error('Erreur lors de la mise à jour. Vérifiez les valeurs saisies.', f'Erreur mise à jour mesure id={id}')
     return redirect(url_for('history'))
 
 
 @app.route('/api/ha/temperature', methods=['POST'])
 def ha_temperature():
     """Endpoint appelé par Home Assistant pour envoyer la température."""
-    s = get_settings()
-    expected = s.get('ha_token', '')
-
-    # Token accepté via : Authorization: Bearer <token>  OU  corps JSON {"token": ...}
-    auth = request.headers.get('Authorization', '')
-    if auth.startswith('Bearer '):
-        token = auth[7:].strip()
-    else:
-        data = request.get_json(silent=True) or {}
-        token = str(data.get('token', '') or request.form.get('token', ''))
-
-    if not expected or token != expected:
-        return jsonify({'ok': False, 'error': 'Token invalide ou manquant'}), 401
+    # Token accepté via Authorization: Bearer <token> OU corps JSON/form {"token": ...}
+    data_peek = request.get_json(silent=True) or {}
+    fallback  = str(data_peek.get('token', '') or request.form.get('token', ''))
+    err = _check_bearer_token('ha_token', fallback)
+    if err:
+        return err
 
     body = request.get_json(silent=True) or request.form
     try:
@@ -1343,16 +1526,17 @@ def ha_temperature():
         now_str     = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
 
         with get_db() as conn:
-            # Feature 14 — rate limit : 1 insertion par minute maximum
+            # Rate limit configurable (défaut 60 s)
+            rate_limit_s = max(10, int(s.get('ha_rate_limit_s') or 60))
             last_row = conn.execute(
                 "SELECT recorded_at FROM temperature_log ORDER BY recorded_at DESC LIMIT 1"
             ).fetchone()
             if last_row:
                 last_time = datetime.fromisoformat(last_row['recorded_at'].replace(' ', 'T'))
-                if (datetime.now() - last_time).total_seconds() < 60:
+                if (datetime.now() - last_time).total_seconds() < rate_limit_s:
                     return jsonify({
                         'ok': False,
-                        'error': 'Rate limit : 1 insertion par minute maximum',
+                        'error': f'Rate limit : 1 insertion par {rate_limit_s} s maximum',
                     }), 429
 
             conn.execute(
@@ -1473,8 +1657,8 @@ def api_pool_volume():
         vol = float(data.get('volume', 0))
         if vol < 100:
             return jsonify({'ok': False, 'error': 'Volume trop petit (min 100 L)'}), 400
-        save_setting('pool_volume', str(int(vol)))
-        return jsonify({'ok': True, 'volume': int(vol)})
+        save_setting('pool_volume', str(vol))
+        return jsonify({'ok': True, 'volume': vol})
     except (TypeError, ValueError) as exc:
         return jsonify({'ok': False, 'error': str(exc)}), 400
 
@@ -1498,19 +1682,11 @@ def regenerate_homepage_token():
 @app.route('/api/homepage')
 def api_homepage():
     """Widget Homepage (https://gethomepage.dev) — Custom API."""
-    s        = get_settings()
-    expected = s.get('homepage_token', '')
+    err = _check_bearer_token('homepage_token', request.args.get('token', ''))
+    if err:
+        return err
 
-    # Accepte Bearer token dans Authorization ou ?token= en query string
-    auth = request.headers.get('Authorization', '')
-    if auth.startswith('Bearer '):
-        token = auth[7:].strip()
-    else:
-        token = request.args.get('token', '')
-
-    if not expected or token != expected:
-        return jsonify({'error': 'Token invalide ou manquant'}), 401
-
+    s           = get_settings()
     last        = get_last_measurement()
     latest_temp = get_latest_temperature()
     pool_volume = float(s.get('pool_volume', 50000))
@@ -1600,15 +1776,21 @@ def add_treatment():
             )
         flash(f'Traitement enregistré — retester dans {_fmt_hours(wait_h)} !', 'success')
     except Exception as exc:
-        logger.exception('Erreur ajout traitement')
-        flash('Erreur lors de l\'enregistrement du traitement.', 'danger')
+        _flash_error('Erreur lors de l\'enregistrement du traitement.', 'Erreur ajout traitement')
     return redirect(url_for('index'))
 
 
 @app.route('/treatments/delete/<int:id>', methods=['POST'])
 def delete_treatment(id):
     with get_db() as conn:
+        row = conn.execute('SELECT product_name, parameter FROM treatments WHERE id = ?', (id,)).fetchone()
         conn.execute('DELETE FROM treatments WHERE id = ?', (id,))
+        if row:
+            conn.execute(
+                'INSERT INTO audit_log (action, entity, entity_id, detail) VALUES (?, ?, ?, ?)',
+                ('delete', 'treatment', id,
+                 json.dumps({'product_name': row['product_name'], 'parameter': row['parameter']}))
+            )
     return redirect(url_for('index'))
 
 
@@ -1649,8 +1831,7 @@ def add_product():
             )
         flash('Produit ajouté !', 'success')
     except Exception as exc:
-        logger.exception('Erreur ajout produit')
-        flash('Erreur lors de l\'ajout du produit. Vérifiez les valeurs saisies.', 'danger')
+        _flash_error('Erreur lors de l\'ajout du produit. Vérifiez les valeurs saisies.', 'Erreur ajout produit')
     return redirect(url_for('calculator') + '#produits')
 
 
@@ -1684,8 +1865,7 @@ def edit_product(id):
             )
         flash('Produit mis à jour !', 'success')
     except Exception as exc:
-        logger.exception('Erreur mise à jour produit id=%s', id)
-        flash('Erreur lors de la mise à jour du produit. Vérifiez les valeurs saisies.', 'danger')
+        _flash_error('Erreur lors de la mise à jour du produit. Vérifiez les valeurs saisies.', f'Erreur mise à jour produit id={id}')
     return redirect(url_for('calculator') + '#produits')
 
 
@@ -1735,12 +1915,18 @@ def purge_measurements():
         else:
             with get_db() as conn:
                 conn.execute('DELETE FROM measurements WHERE measured_at < ?', (cutoff,))
+                treat_count = conn.execute(
+                    'SELECT COUNT(*) FROM treatments WHERE added_at < ?', (cutoff,)
+                ).fetchone()[0]
+                conn.execute('DELETE FROM treatments WHERE added_at < ?', (cutoff,))
             for row in photo_rows:
                 _delete_photo_file(row['photo_path'])
-            flash(f'{count} mesure(s) supprimée(s) avant le {before_date}.', 'success')
+            msg = f'{count} mesure(s) supprimée(s) avant le {before_date}.'
+            if treat_count:
+                msg += f' {treat_count} traitement(s) orphelin(s) supprimé(s).'
+            flash(msg, 'success')
     except Exception as exc:
-        logger.exception('Erreur purge mesures')
-        flash('Erreur lors de la purge. Vérifiez la date saisie.', 'danger')
+        _flash_error('Erreur lors de la purge. Vérifiez la date saisie.', 'Erreur purge mesures')
     return redirect(url_for('history'))
 
 
@@ -1766,4 +1952,5 @@ if __name__ == '__main__':
     if not scheduler.running:
         scheduler.start()
     atexit.register(lambda: scheduler.shutdown(wait=False))
-    app.run(debug=False, host='0.0.0.0', port=5000)
+    atexit.register(lambda: _bg_pool.shutdown(wait=False))
+    app.run(debug=False, host='0.0.0.0', port=_active_port)

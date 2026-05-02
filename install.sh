@@ -11,7 +11,7 @@ APP_DIR="/opt/pool"
 APP_USER="poolmgr"
 APP_GROUP="poolmgr"
 SERVICE="pool-manager"
-PORT=5000
+PORT=5124
 PYTHON="python3"
 
 # ── Couleurs ─────────────────────────────────────────────────────────────────
@@ -132,10 +132,16 @@ section "Configuration"
 SECRET_FILE="$APP_DIR/.env"
 if [[ ! -f "$SECRET_FILE" ]]; then
   SECRET_KEY=$($PYTHON -c "import secrets; print(secrets.token_hex(32))")
-  echo "SECRET_KEY=$SECRET_KEY" > "$SECRET_FILE"
+  printf 'SECRET_KEY=%s\nPORT=%s\n' "$SECRET_KEY" "$PORT" > "$SECRET_FILE"
   ok "Clé secrète Flask générée"
+  ok "Port configuré : $PORT"
 else
-  ok "Clé secrète existante conservée"
+  ok "Fichier .env existant conservé"
+  # Ajouter PORT si absent (migration depuis une ancienne installation)
+  if ! grep -q '^PORT=' "$SECRET_FILE" 2>/dev/null; then
+    echo "PORT=$PORT" >> "$SECRET_FILE"
+    ok "PORT=$PORT ajouté dans .env"
+  fi
 fi
 
 # ── Permissions ───────────────────────────────────────────────────────────────
