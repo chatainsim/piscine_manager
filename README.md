@@ -1,6 +1,8 @@
 # 🏊 Pool Manager
 
-Application web de suivi et de gestion d'une piscine au brome. Saisie des mesures, calcul des doses de traitement, historique avec graphiques, alertes Telegram et intégration Home Assistant.
+> Cette application a été entièrement conçue et développée avec [Claude](https://claude.ai) (Anthropic).
+
+Application web de suivi et de gestion d'une piscine au **brome ou au chlore**. Saisie des mesures, calcul des doses de traitement, historique avec graphiques, alertes Telegram et intégration Home Assistant.
 
 ---
 
@@ -8,8 +10,9 @@ Application web de suivi et de gestion d'une piscine au brome. Saisie des mesure
 
 | Domaine | Détail |
 |---|---|
-| **Mesures** | Saisie de pH, brome, dureté (TH), alcalinité (TAC) et température |
-| **Recommandations** | Diagnostic automatique hors-norme avec conseil de traitement |
+| **Type de désinfectant** | Sélection **Brome** (défaut) ou **Chlore** — plages idéales, doses et étiquettes adaptées automatiquement |
+| **Mesures** | Saisie de pH, brome/chlore, dureté (TH), alcalinité (TAC) et température |
+| **Recommandations** | Diagnostic automatique hors-norme avec conseil de traitement adapté au type de désinfectant |
 | **Calculateur** | Calcul de dose par produit selon le volume de la piscine |
 | **Traitements** | Historique des produits ajoutés, délai avant retest configurable par produit |
 | **Historique** | Graphiques d'évolution + stats mensuelles et comparaison annuelle (YoY) |
@@ -75,7 +78,7 @@ Les paramètres sont stockés dans la base SQLite ; le port et la clé secrète 
 
 | Section | Contenu |
 |---|---|
-| **Votre piscine** | Volume (litres), capteur HA, référence home page |
+| **Votre piscine** | Volume (litres), type de désinfectant (Brome/Chlore), capteur HA, référence home page |
 | **⚙️ Application** | Port d'écoute (modifiable sans toucher au code) |
 | **Telegram** | Token bot + Chat ID, rappels périodiques, délai de mesure |
 | **Rappels** | Fréquence et heure des rappels automatiques |
@@ -99,7 +102,7 @@ Le fichier `.env` est créé automatiquement par `install.sh`. En développement
 ```
 pool/
 ├── app.py                  # Application Flask principale
-├── recommendations.py      # Valeurs idéales et calcul des doses
+├── recommendations.py      # Valeurs idéales brome/chlore et calcul des doses
 ├── requirements.txt
 ├── install.sh              # Script d'installation systemd
 ├── .env                    # Clé secrète + port (hors dépôt)
@@ -142,6 +145,8 @@ curl -H "Authorization: Bearer <token>" http://localhost:5124/api/homepage
   "status": { "ph": "ok", "bromine": "ok", ... }
 }
 ```
+
+> **Note** : La clé `bromine` est utilisée en base quelle que soit la configuration (brome ou chlore), afin d'éviter toute migration de données. Le label affiché dans l'interface s'adapte automatiquement.
 
 Le token se configure dans **Paramètres → Votre piscine → Token API homepage**.
 
