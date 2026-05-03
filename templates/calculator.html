@@ -59,7 +59,7 @@
    ideal.ph.min, ideal.ph.max, ideal.ph.ideal),
   ('hardness', '🪨', 'Dureté (TH)', 'ppm',
    ideal.hardness.min, ideal.hardness.max, ideal.hardness.ideal),
-  ('bromine', '🧪', 'Brome', 'ppm',
+  ('bromine', '🧪', ideal.bromine.label, 'ppm',
    ideal.bromine.min, ideal.bromine.max, ideal.bromine.ideal),
 ] %}
 
@@ -201,7 +201,7 @@
       </thead>
       <tbody>
         {% for p in products %}
-        {% set plabel = {'alkalinity':'⚗️ TAC','ph':'💧 pH','hardness':'🪨 TH','bromine':'🧪 Brome'} %}
+        {% set plabel = {'alkalinity':'⚗️ TAC','ph':'💧 pH','hardness':'🪨 TH','bromine': '🧪 ' + ideal.bromine.label} %}
         <tr>
           <td>
             {{ plabel[p.parameter] }}
@@ -264,7 +264,7 @@
         <option value="alkalinity">le TAC</option>
         <option value="ph">le pH</option>
         <option value="hardness">le TH</option>
-        <option value="bromine">le Brome</option>
+        <option value="bromine">le {{ ideal.bromine.label }}</option>
       </select>
 
       <span>de</span>
@@ -349,7 +349,7 @@
                 <option value="alkalinity">⚗️ Alcalinité (TAC)</option>
                 <option value="ph">💧 pH</option>
                 <option value="hardness">🪨 Dureté (TH)</option>
-                <option value="bromine">🧪 Brome</option>
+                <option value="bromine">🧪 {{ ideal.bromine.label }}</option>
               </select>
             </div>
             <div class="col-md-4">

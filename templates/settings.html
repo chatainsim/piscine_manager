@@ -38,6 +38,14 @@
           Exemple : spa 1 500 L · petite piscine 15 000 L · grande piscine 60 000 L
         </div>
       </div>
+      <div class="col-md-4">
+        <label class="form-label fw-semibold">Type de désinfectant</label>
+        <select class="form-select" name="pool_type">
+          <option value="brome"  {% if settings.pool_type != 'chlore' %}selected{% endif %}>🧪 Brome</option>
+          <option value="chlore" {% if settings.pool_type == 'chlore' %}selected{% endif %}>🧴 Chlore</option>
+        </select>
+        <div class="form-text">Modifie les plages idéales, les recommandations et les alertes.</div>
+      </div>
     </div>
     <div class="mt-3">
       <button type="submit" class="btn btn-pool btn-sm px-4">💾 Sauvegarder</button>
@@ -473,7 +481,7 @@ automation:
 
 <!-- ── Valeurs de référence ─────────────────────────────────────────────────── -->
 <div class="settings-section" id="reference">
-  <h5>📋 Valeurs de référence (piscine au brome)</h5>
+  <h5>📋 Valeurs de référence (piscine au {{ ideal.bromine.label | lower }})</h5>
   <div class="table-responsive">
     <table class="table table-sm table-bordered">
       <thead class="table-light">
@@ -487,27 +495,27 @@ automation:
       <tbody>
         <tr>
           <td><strong>💧 pH</strong></td>
-          <td class="text-warning">< 7,2 – eau corrosive</td>
+          <td class="text-warning">&lt; 7,2 – eau corrosive</td>
           <td class="table-success fw-bold">7,2 – 7,6</td>
-          <td class="text-danger">> 7,8 – brome inactif</td>
+          <td class="text-danger">&gt; 7,8 – {{ ideal.bromine.label | lower }} peu efficace</td>
         </tr>
         <tr>
-          <td><strong>🧪 Brome</strong></td>
-          <td class="text-warning">< 3 ppm – risque bactérien</td>
-          <td class="table-success fw-bold">3 – 5 ppm</td>
-          <td class="text-danger">> 8 ppm – irritant</td>
+          <td><strong>🧪 {{ ideal.bromine.label }}</strong></td>
+          <td class="text-warning">&lt; {{ ideal.bromine.min }} ppm – risque bactérien</td>
+          <td class="table-success fw-bold">{{ ideal.bromine.min }} – {{ ideal.bromine.max }} ppm</td>
+          <td class="text-danger">&gt; {{ ideal.bromine.critical_high }} ppm – irritant</td>
         </tr>
         <tr>
           <td><strong>🪨 Dureté TH</strong></td>
-          <td class="text-warning">< 200 ppm – corrosion</td>
+          <td class="text-warning">&lt; 200 ppm – corrosion</td>
           <td class="table-success fw-bold">200 – 400 ppm</td>
-          <td class="text-danger">> 500 ppm – entartrage</td>
+          <td class="text-danger">&gt; 500 ppm – entartrage</td>
         </tr>
         <tr>
           <td><strong>⚗️ Alcalinité TAC</strong></td>
-          <td class="text-warning">< 80 ppm – pH instable</td>
+          <td class="text-warning">&lt; 80 ppm – pH instable</td>
           <td class="table-success fw-bold">80 – 120 ppm</td>
-          <td class="text-danger">> 150 ppm – pH difficile à baisser</td>
+          <td class="text-danger">&gt; 150 ppm – pH difficile à baisser</td>
         </tr>
       </tbody>
     </table>
@@ -768,7 +776,7 @@ document.getElementById('btn-test-homepage')?.addEventListener('click', async ()
       const p = data.preview || {};
       const vals = [
         p.ph        != null ? `pH ${p.ph}`             : null,
-        p.bromine   != null ? `Brome ${p.bromine} ppm` : null,
+        p.bromine   != null ? `{{ ideal.bromine.label }} ${p.bromine} ppm` : null,
         p.temperature != null ? `${p.temperature} °C`  : null,
       ].filter(Boolean).join(' · ') || 'Aucune mesure';
       result.innerHTML = `<span style="color:var(--green-ok)">✅ OK — ${vals}</span>`;

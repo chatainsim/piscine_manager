@@ -98,7 +98,7 @@
 
   {% set charts = [
     ('chart-ph',         'pH',              '💧 pH',            '#0077b6', ideal.ph.min,         ideal.ph.max),
-    ('chart-bromine',    'chart_bromine',   '🧪 Brome (ppm)',   '#2196f3', ideal.bromine.min,    ideal.bromine.max),
+    ('chart-bromine',    'chart_bromine',   '🧪 ' + ideal.bromine.label + ' (ppm)', '#2196f3', ideal.bromine.min, ideal.bromine.max),
     ('chart-hardness',   'chart_hardness',  '🪨 Dureté (ppm)',  '#00b4d8', ideal.hardness.min,   ideal.hardness.max),
     ('chart-alkalinity', 'chart_alkalinity','⚗️ Alcalinité (ppm)','#023e8a',ideal.alkalinity.min,ideal.alkalinity.max),
   ] %}
@@ -111,7 +111,7 @@
   </div>
   <div class="col-md-6">
     <div class="card chart-card">
-      <div class="card-header">🧪 Brome (ppm)</div>
+      <div class="card-header">🧪 {{ ideal.bromine.label }} (ppm)</div>
       <div class="card-body"><canvas id="chart-bromine"></canvas></div>
     </div>
   </div>
@@ -167,7 +167,7 @@
   'no_baseline':  ('—',  'Sans référence','bg-light border','text-secondary'),
 } %}
 {% set punit = {'alkalinity':' ppm','ph':'','hardness':' ppm','bromine':' ppm'} %}
-{% set plabel = {'alkalinity':'TAC','ph':'pH','hardness':'TH','bromine':'Brome'} %}
+{% set plabel = {'alkalinity':'TAC','ph':'pH','hardness':'TH','bromine': ideal.bromine.label} %}
 
 <div class="mb-4">
   <h5 class="text-blue-deep fw-bold mb-3">📊 Bilan des traitements</h5>
@@ -276,7 +276,7 @@
     </div>
     <div class="col-md-6">
       <div class="card chart-card">
-        <div class="card-header">🧪 Brome (ppm) — min / moy / max</div>
+        <div class="card-header">🧪 {{ ideal.bromine.label }} (ppm) — min / moy / max</div>
         <div class="card-body"><canvas id="monthly-br"></canvas></div>
       </div>
     </div>
@@ -309,7 +309,7 @@
     </div>
     <div class="col-md-6">
       <div class="card chart-card">
-        <div class="card-header">🧪 Brome (ppm) — moy. mensuelle</div>
+        <div class="card-header">🧪 {{ ideal.bromine.label }} (ppm) — moy. mensuelle</div>
         <div class="card-body"><canvas id="yoy-br"></canvas></div>
       </div>
     </div>
@@ -338,7 +338,7 @@
         <tr>
           <th>📅 Date</th>
           <th>💧 pH</th>
-          <th>🧪 Brome</th>
+          <th>🧪 {{ ideal.bromine.label }}</th>
           <th>🪨 Dureté</th>
           <th>⚗️ Alcalinité</th>
           <th>🌡️ Temp.</th>
@@ -437,10 +437,10 @@
               <div class="form-text">Idéal : 7,2 – 7,6</div>
             </div>
             <div class="col-6 col-md-3">
-              <label class="form-label fw-semibold">🧪 Brome (ppm)</label>
+              <label class="form-label fw-semibold">🧪 {{ ideal.bromine.label }} (ppm)</label>
               <input type="number" class="form-control" name="bromine" id="edit-bromine"
                      step="0.1" min="0" placeholder="—">
-              <div class="form-text">Idéal : 3 – 5 ppm</div>
+              <div class="form-text">Idéal : {{ ideal.bromine.min }} – {{ ideal.bromine.max }} ppm</div>
             </div>
             <div class="col-6 col-md-3">
               <label class="form-label fw-semibold">🪨 Dureté (ppm)</label>

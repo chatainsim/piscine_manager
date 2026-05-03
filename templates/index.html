@@ -47,10 +47,10 @@
 <div class="row g-3 mb-4">
 
   {% set params = [
-    ('ph',         '💧', 'pH',            ''),
-    ('bromine',    '🧪', 'Brome',         ' ppm'),
-    ('hardness',   '🪨', 'Dureté (TH)',   ' ppm'),
-    ('alkalinity', '⚗️', 'Alcalinité (TAC)',' ppm'),
+    ('ph',         '💧', 'pH',                    ''),
+    ('bromine',    '🧪', ideal.bromine.label,     ' ppm'),
+    ('hardness',   '🪨', 'Dureté (TH)',            ' ppm'),
+    ('alkalinity', '⚗️', 'Alcalinité (TAC)',       ' ppm'),
   ] %}
 
   {% for key, icon, label, unit in params %}
@@ -122,11 +122,11 @@
               <div class="form-text">Idéal : 7,2 – 7,6{% if last and last.ph is not none %} · dernier : {{ last.ph }}{% endif %}</div>
             </div>
             <div class="col-6">
-              <label class="form-label fw-semibold" for="f-bromine">🧪 Brome (ppm)</label>
+              <label class="form-label fw-semibold" for="f-bromine">🧪 {{ ideal.bromine.label }} (ppm)</label>
               <input type="number" class="form-control" name="bromine" id="f-bromine"
                      step="0.1" min="0"
-                     placeholder="{{ last.bromine if last and last.bromine is not none else '4' }}">
-              <div class="form-text">Idéal : 3 – 5 ppm{% if last and last.bromine is not none %} · dernier : {{ last.bromine }}{% endif %}</div>
+                     placeholder="{{ last.bromine if last and last.bromine is not none else ideal.bromine.ideal }}">
+              <div class="form-text">Idéal : {{ ideal.bromine.min }} – {{ ideal.bromine.max }} ppm{% if last and last.bromine is not none %} · dernier : {{ last.bromine }}{% endif %}</div>
             </div>
           </div>
 
@@ -190,7 +190,7 @@
     <div class="mb-3">
       <h5 class="text-blue-deep fw-bold">⏳ Traitements en cours</h5>
       {% for t in active_treatments %}
-      {% set plabel = {'alkalinity':'TAC','ph':'pH','hardness':'TH','bromine':'Brome'} %}
+      {% set plabel = {'alkalinity':'TAC','ph':'pH','hardness':'TH','bromine': ideal.bromine.label} %}
       <div class="treatment-card {{ 'treatment-ready' if t.can_retest else 'treatment-waiting' }} mb-2">
         <div class="d-flex align-items-center gap-3">
           <span class="treatment-icon">{{ '✅' if t.can_retest else '⏳' }}</span>
@@ -311,7 +311,7 @@
                     <option value="alkalinity">⚗️ TAC</option>
                     <option value="ph">💧 pH</option>
                     <option value="hardness">🪨 TH</option>
-                    <option value="bromine">🧪 Brome</option>
+                    <option value="bromine">🧪 {{ ideal.bromine.label }}</option>
                   </select>
                 </div>
                 <div class="col-6 col-sm-2">
