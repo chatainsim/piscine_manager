@@ -1,15 +1,30 @@
 # Valeurs idéales pour une piscine au brome
-IDEAL_RANGES = {
+IDEAL_RANGES_BROME = {
     'ph':         {'min': 7.2, 'max': 7.6, 'ideal': 7.4,  'unit': '',    'label': 'pH'},
-    'bromine':    {'min': 3.0, 'max': 5.0, 'ideal': 4.0,  'unit': 'ppm', 'label': 'Brome'},
+    'bromine':    {'min': 3.0, 'max': 5.0, 'ideal': 4.0,  'unit': 'ppm', 'label': 'Brome',  'critical_high': 8.0},
     'hardness':   {'min': 200, 'max': 400, 'ideal': 300,   'unit': 'ppm', 'label': 'Dureté (TH)'},
     'alkalinity': {'min': 80,  'max': 120, 'ideal': 100,   'unit': 'ppm', 'label': 'Alcalinité (TAC)'},
 }
 
+# Valeurs idéales pour une piscine au chlore
+IDEAL_RANGES_CHLORE = {
+    'ph':         {'min': 7.2, 'max': 7.6, 'ideal': 7.4,  'unit': '',    'label': 'pH'},
+    'bromine':    {'min': 1.0, 'max': 3.0, 'ideal': 2.0,  'unit': 'ppm', 'label': 'Chlore', 'critical_high': 5.0},
+    'hardness':   {'min': 200, 'max': 400, 'ideal': 300,   'unit': 'ppm', 'label': 'Dureté (TH)'},
+    'alkalinity': {'min': 80,  'max': 120, 'ideal': 100,   'unit': 'ppm', 'label': 'Alcalinité (TAC)'},
+}
 
-def get_status(param, value):
+IDEAL_RANGES = IDEAL_RANGES_BROME  # backward compat
+
+
+def get_ideal_ranges(pool_type: str = 'brome') -> dict:
+    """Retourne les plages idéales selon le type de désinfectant configuré."""
+    return IDEAL_RANGES_CHLORE if pool_type == 'chlore' else IDEAL_RANGES_BROME
+
+
+def get_status(param, value, pool_type='brome'):
     """Retourne 'ok', 'low' ou 'high'."""
-    r = IDEAL_RANGES[param]
+    r = get_ideal_ranges(pool_type)[param]
     if value < r['min']:
         return 'low'
     if value > r['max']:
@@ -52,18 +67,20 @@ def _calc_dose_str(product, diff, pool_volume_liters):
     return f"{disp} {unit}"
 
 
-def get_recommendations(measurement, pool_volume_liters, products=None):
+def get_recommendations(measurement, pool_volume_liters, products=None, pool_type='brome'):
     """
     Retourne une liste de recommandations avec produit et dosage.
     Si products est fourni (liste de dicts de la table products), utilise les produits
     en base pour les noms et les dosages. Sinon, utilise les valeurs par défaut.
     L'alcalinité doit être corrigée AVANT le pH.
     """
+    ranges    = get_ideal_ranges(pool_type)
+    is_chlore = (pool_type == 'chlore')
     recs = []
     v = _v(pool_volume_liters)
 
     ph         = measurement.get('ph')
-    bromine    = measurement.get('bromine')
+    sanitizer  = measurement.get('bromine')  # colonne DB toujours 'bromine'
     hardness   = measurement.get('hardness')
     alkalinity = measurement.get('alkalinity')
 
@@ -169,6 +186,7 @@ def get_recommendations(measurement, pool_volume_liters, products=None):
                 product_name = 'Bisulfate de sodium (pH-)'
                 dose_str     = f'{dose:.0f} g'
                 wait_note    = ' Retester après 4 h.'
+            san_label_lc = 'chlore' if is_chlore else 'brome'
             recs.append({
                 'param':   'pH',
                 'key':     'ph',
@@ -179,7 +197,7 @@ def get_recommendations(measurement, pool_volume_liters, products=None):
                 'dose':    dose_str,
                 'icon':    '⬇️',
                 'detail':  (
-                    f"Le pH ({ph}) est trop élevé – réduit l'efficacité du brome. "
+                    f"Le pH ({ph}) est trop élevé – réduit l'efficacité du {san_label_lc}. "
                     f"Ajouter environ <strong>{dose_str}</strong> de {product_name}. "
                     f"Verser en plusieurs fois si l'écart est important."
                     f"{wait_note}"
@@ -236,71 +254,91 @@ def get_recommendations(measurement, pool_volume_liters, products=None):
                 ),
             })
 
-    # ── Brome ────────────────────────────────────────────────────────────────
-    if bromine is not None:
-        if bromine < 3:
-            diff = 4.0 - bromine
+    # ── Désinfectant (Brome ou Chlore) ───────────────────────────────────────
+    if sanitizer is not None:
+        san_ranges  = ranges['bromine']
+        san_label   = san_ranges['label']        # 'Brome' ou 'Chlore'
+        san_label_lc = san_label.lower()
+        san_min     = san_ranges['min']          # 3.0 ou 1.0
+        san_max     = san_ranges['max']          # 5.0 ou 3.0
+        san_ideal   = san_ranges['ideal']        # 4.0 ou 2.0
+        san_crit    = san_ranges['critical_high'] # 8.0 ou 5.0
+
+        if sanitizer < san_min:
+            diff = san_ideal - sanitizer
             p = _find_product(products, 'bromine', 'up')
             if p:
                 product_name = p['name']
                 dose_str     = _calc_dose_str(p, diff, pool_volume_liters)
                 wait_note    = f" Attendre {p['wait_hours']} h avant de retester." if p.get('wait_hours') else " Retester après 4 h."
             else:
-                dose = diff * 13 * v
-                product_name = 'Brome (granulés ou pastilles)'
-                dose_str     = f'{dose:.0f} g'
-                wait_note    = ' Retester après 4 h.'
+                if is_chlore:
+                    dose = diff * 15 * v
+                    product_name = 'Chlore (granulés ou galets)'
+                else:
+                    dose = diff * 13 * v
+                    product_name = 'Brome (granulés ou pastilles)'
+                dose_str  = f'{dose:.0f} g'
+                wait_note = ' Retester après 4 h.'
             recs.append({
-                'param':   'Brome',
+                'param':   san_label,
                 'key':     'bromine',
                 'status':  'low',
-                'value':   bromine,
-                'ideal':   '3 – 5 ppm',
+                'value':   sanitizer,
+                'ideal':   f'{san_min} – {san_max} ppm',
                 'product': product_name,
                 'dose':    dose_str,
                 'icon':    '⬆️',
                 'detail':  (
-                    f"Le brome ({bromine} ppm) est insuffisant – risque bactérien. "
+                    f"Le {san_label_lc} ({sanitizer} ppm) est insuffisant – risque bactérien. "
                     f"Ajouter environ <strong>{dose_str}</strong> de {product_name} "
                     f"(ou ajuster le débit du diffuseur). "
-                    f"<strong>Ne pas se baigner</strong> tant que le taux n'est pas entre 3 et 5 ppm."
+                    f"<strong>Ne pas se baigner</strong> tant que le taux n'est pas entre {san_min} et {san_max} ppm."
                     f"{wait_note}"
                 ),
             })
-        elif bromine > 5:
-            if bromine > 8:
+        elif sanitizer > san_max:
+            if sanitizer > san_crit:
                 vol_dilution = int(pool_volume_liters * 0.10)
+                retest_delay = '12 h' if is_chlore else '24 h'
                 recs.append({
-                    'param':   'Brome',
+                    'param':   san_label,
                     'key':     'bromine',
                     'status':  'high',
-                    'value':   bromine,
-                    'ideal':   '3 – 5 ppm',
+                    'value':   sanitizer,
+                    'ideal':   f'{san_min} – {san_max} ppm',
                     'product': 'Arrêt traitement + dilution',
                     'dose':    f'Vider ~{vol_dilution:,} L (10%)',
                     'icon':    '🚫',
                     'detail':  (
-                        f"Le brome ({bromine} ppm) est très élevé – irritant, dangereux. "
-                        f"<strong>Arrêter immédiatement tout apport de brome.</strong> "
+                        f"Le {san_label_lc} ({sanitizer} ppm) est très élevé – irritant, dangereux. "
+                        f"<strong>Arrêter immédiatement tout apport de {san_label_lc}.</strong> "
                         f"Ne pas se baigner. Vider ~{vol_dilution:,} L et remplir avec de l'eau fraîche. "
-                        f"Laisser le soleil décomposer le brome résiduel (sans couvercle). Retester dans 24 h."
+                        f"Laisser le soleil décomposer le {san_label_lc} résiduel (sans couvercle). "
+                        f"Retester dans {retest_delay}."
                     ),
                 })
             else:
+                retest_delay = '4 h' if is_chlore else '24 h'
+                decomp_note  = (
+                    'La lumière UV du soleil décompose rapidement le chlore libre.'
+                    if is_chlore else
+                    'La lumière UV du soleil décompose naturellement le brome.'
+                )
                 recs.append({
-                    'param':   'Brome',
+                    'param':   san_label,
                     'key':     'bromine',
                     'status':  'high',
-                    'value':   bromine,
-                    'ideal':   '3 – 5 ppm',
+                    'value':   sanitizer,
+                    'ideal':   f'{san_min} – {san_max} ppm',
                     'product': 'Arrêt du traitement',
                     'dose':    'Attendre la décomposition naturelle',
                     'icon':    '⏳',
                     'detail':  (
-                        f"Le brome ({bromine} ppm) est légèrement élevé. "
-                        f"Arrêter l'apport de brome. "
-                        f"La lumière UV du soleil décompose naturellement le brome. "
-                        f"Retester dans 24 h. La baignade est possible mais déconseillée."
+                        f"Le {san_label_lc} ({sanitizer} ppm) est légèrement élevé. "
+                        f"Arrêter l'apport de {san_label_lc}. "
+                        f"{decomp_note} "
+                        f"Retester dans {retest_delay}. La baignade est possible mais déconseillée."
                     ),
                 })
 

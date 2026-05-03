@@ -1,7 +1,5 @@
 # 🏊 Pool Manager
 
-**Application codé par Claude.**
-
 Application web de suivi et de gestion d'une piscine au brome. Saisie des mesures, calcul des doses de traitement, historique avec graphiques, alertes Telegram et intégration Home Assistant.
 
 ---
@@ -163,5 +161,3 @@ systemctl stop pool-manager         # arrêter
 ## Licence
 
 Usage personnel — aucune licence open-source définie.
-
-<img width="1920" height="1949" alt="image" src="https://github.com/user-attachments/assets/7b1c299e-f4fd-4ef7-b969-54832f0ed4d0" />

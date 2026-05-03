@@ -20,7 +20,7 @@ from flask import (Flask, Response, flash, jsonify, redirect, render_template,
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-from recommendations import IDEAL_RANGES, get_recommendations, get_status
+from recommendations import IDEAL_RANGES, get_ideal_ranges, get_recommendations, get_status
 
 # ─── App setup ───────────────────────────────────────────────────────────────
 
@@ -161,7 +161,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB max par requête (pho
 # Utilisé uniquement quand le produit n'a pas de délai propre (champ wait_hours de la
 # table products). Pour ajuster par produit : Calculateur → fiche produit → "Délai avant retest".
 WAIT_HOURS = 6
-SCHEMA_VERSION = 12  # incrémenter à chaque nouvelle migration
+SCHEMA_VERSION = 13  # incrémenter à chaque nouvelle migration
 
 logger = logging.getLogger(__name__)
 
@@ -218,12 +218,19 @@ BOUNDS = {
 }
 
 # Feature 6 — seuils critiques pour alertes Telegram immédiates
-CRITICAL_THRESHOLDS = {
+CRITICAL_THRESHOLDS_BROME = {
     'ph':         {'low': 6.5,  'high': 8.5,  'label': 'pH',              'unit': ''},
     'bromine':    {'low': 1.0,  'high': 8.0,  'label': 'Brome',           'unit': ' ppm'},
     'hardness':   {'low': 100,  'high': 800,  'label': 'Dureté (TH)',     'unit': ' ppm'},
     'alkalinity': {'low': 50,   'high': 200,  'label': 'Alcalinité (TAC)','unit': ' ppm'},
 }
+CRITICAL_THRESHOLDS_CHLORE = {
+    'ph':         {'low': 6.5,  'high': 8.5,  'label': 'pH',              'unit': ''},
+    'bromine':    {'low': 0.5,  'high': 5.0,  'label': 'Chlore',          'unit': ' ppm'},
+    'hardness':   {'low': 100,  'high': 800,  'label': 'Dureté (TH)',     'unit': ' ppm'},
+    'alkalinity': {'low': 50,   'high': 200,  'label': 'Alcalinité (TAC)','unit': ' ppm'},
+}
+CRITICAL_THRESHOLDS = CRITICAL_THRESHOLDS_BROME  # backward compat
 
 
 def _parse_param(name, value_str):
@@ -246,8 +253,10 @@ def _send_critical_alert(measurement):
         if not token or not chat_id:
             return
 
+        pool_type  = s.get('pool_type', 'brome')
+        thresholds_map = CRITICAL_THRESHOLDS_CHLORE if pool_type == 'chlore' else CRITICAL_THRESHOLDS_BROME
         alerts = []
-        for key, thresholds in CRITICAL_THRESHOLDS.items():
+        for key, thresholds in thresholds_map.items():
             val = measurement.get(key)
             if val is None:
                 continue
@@ -274,7 +283,7 @@ def _send_critical_alert(measurement):
 
 
 def _send_to_ha(measurement):
-    """Envoie pH, brome, TH et TAC vers l'API States de Home Assistant (si le push est activé)."""
+    """Envoie pH, désinfectant, TH et TAC vers l'API States de Home Assistant (si le push est activé)."""
     try:
         s = get_settings()
         if s.get('ha_push_enabled', 'true') == 'false':
@@ -289,11 +298,13 @@ def _send_to_ha(measurement):
             'Content-Type':  'application/json',
         }
 
+        pool_type    = s.get('pool_type', 'brome')
+        san_label_ha = 'Chlore Piscine' if pool_type == 'chlore' else 'Brome Piscine'
         entities = [
-            ('ph',        'sensor.pool_manager_ph',        '',    'pH Piscine',              'ph'),
-            ('bromine',   'sensor.pool_manager_bromine',   'ppm', 'Brome Piscine',            None),
-            ('hardness',  'sensor.pool_manager_hardness',  'ppm', 'Dureté TH Piscine',        None),
-            ('alkalinity','sensor.pool_manager_alkalinity','ppm', 'Alcalinité TAC Piscine',   None),
+            ('ph',        'sensor.pool_manager_ph',        '',    'pH Piscine',     'ph'),
+            ('bromine',   'sensor.pool_manager_bromine',   'ppm', san_label_ha,     None),
+            ('hardness',  'sensor.pool_manager_hardness',  'ppm', 'Dureté TH Piscine',       None),
+            ('alkalinity','sensor.pool_manager_alkalinity','ppm', 'Alcalinité TAC Piscine',  None),
         ]
 
         for key, entity_id, unit, friendly_name, device_class in entities:
@@ -367,6 +378,7 @@ def _apply_migrations(conn):
         _m10_ha_push_settings,      # 10 — settings pour l'envoi vers HA
         _m11_temperature_log_index, # 11 — index sur temperature_log.recorded_at
         _m12_audit_log,             # 12 — table audit_log
+        _m13_pool_type,             # 13 — setting pool_type (brome/chlore)
     ]
 
     for idx, fn in enumerate(migrations[current:], start=current + 1):
@@ -554,6 +566,10 @@ def _m12_audit_log(conn):
     conn.execute('CREATE INDEX IF NOT EXISTS idx_audit_log_at ON audit_log(happened_at)')
 
 
+def _m13_pool_type(conn):
+    conn.execute("INSERT OR IGNORE INTO settings VALUES ('pool_type', 'brome')")
+
+
 def _fmt_hours(h):
     """Formate une durée en heures en chaîne lisible."""
     if h < 1 / 60:
@@ -668,7 +684,7 @@ def get_active_treatments():
     return result
 
 
-def get_treatment_correlations():
+def get_treatment_correlations(pool_type='brome'):
     """Corrélation traitement → amélioration : valeurs avant et après pour chaque traitement."""
     treatments, measurements = _load_treatments_with_measurements(limit=100)
     now     = datetime.now()
@@ -708,7 +724,7 @@ def get_treatment_correlations():
             if abs(delta) < 0.01:
                 t['outcome'] = 'unchanged'
             elif (delta > 0) == expected_up:
-                t['outcome'] = 'corrected' if get_status(param, after_val) == 'ok' else 'improved'
+                t['outcome'] = 'corrected' if get_status(param, after_val, pool_type) == 'ok' else 'improved'
             else:
                 t['outcome'] = 'overcorrected'
         elif after_val is None and (added_dt + timedelta(hours=wait_h)) > now:
@@ -829,10 +845,12 @@ def send_reminder():
             products = [dict(r) for r in conn.execute(
                 'SELECT * FROM products ORDER BY parameter, direction, name'
             ).fetchall()]
-        recs = get_recommendations(last, pool_volume, products=products)
+        pool_type = s.get('pool_type', 'brome')
+        recs = get_recommendations(last, pool_volume, products=products, pool_type=pool_type)
+        ideal_ranges = get_ideal_ranges(pool_type)
         if recs:
             alerts = '\n'.join(
-                f"• {r['icon']} {r['param']}: {r['value']} {IDEAL_RANGES[r['key']]['unit']} "
+                f"• {r['icon']} {r['param']}: {r['value']} {ideal_ranges[r['key']]['unit']} "
                 f"→ {r['product']} ({r['dose']})"
                 for r in recs
             )
@@ -850,10 +868,11 @@ def send_reminder():
                 f"Effectuez un nouveau test pour confirmer !"
             )
     else:
+        san_label = 'Chlore' if s.get('pool_type', 'brome') == 'chlore' else 'Brome'
         msg = (
             "🏊 <b>Rappel – Test Piscine</b>\n\n"
             "Aucun test enregistré. Pensez à mesurer :\n"
-            "• pH\n• Brome\n• Dureté (TH)\n• Alcalinité (TAC)"
+            f"• pH\n• {san_label}\n• Dureté (TH)\n• Alcalinité (TAC)"
         )
 
     send_telegram(token, chat_id, msg)
@@ -897,11 +916,12 @@ def send_weekly_summary():
         avg = sum(vals) / len(vals)
         return f"• {label} : moy <b>{avg:.1f}</b> | {min(vals)} – {max(vals)} {unit}"
 
+    san_label  = 'Chlore' if s.get('pool_type', 'brome') == 'chlore' else 'Brome'
     stat_lines = list(filter(None, [
-        _stat('ph',        '💧 pH',        ''),
-        _stat('bromine',   '🧪 Brome',     'ppm'),
-        _stat('hardness',  '🪨 TH',        'ppm'),
-        _stat('alkalinity','⚗️ TAC',       'ppm'),
+        _stat('ph',        '💧 pH',              ''),
+        _stat('bromine',   f'🧪 {san_label}',    'ppm'),
+        _stat('hardness',  '🪨 TH',              'ppm'),
+        _stat('alkalinity','⚗️ TAC',             'ppm'),
     ]))
 
     pool_volume = float(s.get('pool_volume', 50000))
@@ -909,7 +929,8 @@ def send_weekly_summary():
         products = [dict(r) for r in conn.execute(
             'SELECT * FROM products ORDER BY parameter, direction, name'
         ).fetchall()]
-    recs  = get_recommendations(measurements[-1], pool_volume, products=products)
+    pool_type = s.get('pool_type', 'brome')
+    recs  = get_recommendations(measurements[-1], pool_volume, products=products, pool_type=pool_type)
     treats = [dict(r) for r in trows]
 
     msg = (
@@ -1017,13 +1038,15 @@ def index():
 
     last_ago, last_is_old = _time_ago(last['measured_at']) if last else ('', False)
 
-    statuses = {}
+    pool_type = s.get('pool_type', 'brome')
+    ideal     = get_ideal_ranges(pool_type)
+    statuses  = {}
     recs = []
     if last:
         for param in ('ph', 'bromine', 'hardness', 'alkalinity'):
             if last.get(param) is not None:
-                statuses[param] = get_status(param, last[param])
-        recs = get_recommendations(last, pool_volume, products=products)
+                statuses[param] = get_status(param, last[param], pool_type)
+        recs = get_recommendations(last, pool_volume, products=products, pool_type=pool_type)
 
     return render_template(
         'index.html',
@@ -1036,7 +1059,7 @@ def index():
         spark_days=spark_days,
         statuses=statuses,
         recommendations=recs,
-        ideal=IDEAL_RANGES,
+        ideal=ideal,
         now=datetime.now().strftime('%Y-%m-%dT%H:%M'),
         active_treatments=get_active_treatments(),
         products=products,
@@ -1100,6 +1123,9 @@ _stats_cache: dict = {}   # { last_measured_at: (monthly_stats, yoy_rows, curr_y
 
 @app.route('/history')
 def history():
+    s         = get_settings()
+    pool_type = s.get('pool_type', 'brome')
+    ideal     = get_ideal_ranges(pool_type)
     period    = request.args.get('period', '')
     from_date = request.args.get('from_date', '')
     to_date   = request.args.get('to_date', '')
@@ -1177,7 +1203,7 @@ def history():
     measurements = [dict(r) for r in rows]
     for m in measurements:
         m['statuses'] = {
-            param: get_status(param, m[param])
+            param: get_status(param, m[param], pool_type)
             for param in ('ph', 'bromine', 'hardness', 'alkalinity')
             if m.get(param) is not None
         }
@@ -1201,11 +1227,11 @@ def history():
         total_count=total_count,
         table_truncated=table_truncated,
         table_limit=TABLE_LIMIT,
-        ideal=IDEAL_RANGES,
+        ideal=ideal,
         period=period,
         from_date=from_date,
         to_date=to_date,
-        correlations        = get_treatment_correlations(),
+        correlations        = get_treatment_correlations(pool_type=pool_type),
         monthly_stats       = json.dumps(monthly_stats),
         chart_labels        = json.dumps([m['measured_at'][:16].replace('T', ' ') for m in chart_data]),
         chart_ph            = json.dumps(col('ph')),
@@ -1237,7 +1263,9 @@ def export_csv():
 
     output = io.StringIO()
     writer = csv.writer(output, delimiter=';')
-    writer.writerow(['Date/Heure', 'pH', 'Brome (ppm)', 'Dureté TH (ppm)', 'Alcalinité TAC (ppm)', 'Température (°C)', 'Notes'])
+    s         = get_settings()
+    san_label = 'Chlore (ppm)' if s.get('pool_type', 'brome') == 'chlore' else 'Brome (ppm)'
+    writer.writerow(['Date/Heure', 'pH', san_label, 'Dureté TH (ppm)', 'Alcalinité TAC (ppm)', 'Température (°C)', 'Notes'])
     for r in rows:
         writer.writerow([
             r['measured_at'][:16].replace('T', ' '),
@@ -1391,7 +1419,11 @@ def settings_page():
             except (ValueError, TypeError):
                 vol = 50000.0
             save_setting('pool_volume', str(vol))
-            flash('Volume de la piscine sauvegardé.', 'success')
+            pool_type_val = request.form.get('pool_type', 'brome')
+            if pool_type_val not in ('brome', 'chlore'):
+                pool_type_val = 'brome'
+            save_setting('pool_type', pool_type_val)
+            flash('Paramètres de la piscine sauvegardés.', 'success')
 
         elif section == 'serveur':
             try:
@@ -1435,10 +1467,13 @@ def settings_page():
 
         return redirect(url_for('settings_page') + f'#{section}')
 
+    s_dict    = get_settings()
+    pool_type = s_dict.get('pool_type', 'brome')
     return render_template('settings.html',
-        settings=get_settings(),
+        settings=s_dict,
         active_port=_active_port,
         configured_port=_get_env_port(),
+        ideal=get_ideal_ranges(pool_type),
     )
 
 
@@ -1696,13 +1731,14 @@ def api_homepage():
             'SELECT * FROM products ORDER BY parameter, direction, name'
         ).fetchall()]
 
-    statuses = {}
-    recs     = []
+    pool_type = s.get('pool_type', 'brome')
+    statuses  = {}
+    recs      = []
     if last:
         for param in ('ph', 'bromine', 'hardness', 'alkalinity'):
             if last.get(param) is not None:
-                statuses[param] = get_status(param, last[param])
-        recs = get_recommendations(last, pool_volume, products=api_products)
+                statuses[param] = get_status(param, last[param], pool_type)
+        recs = get_recommendations(last, pool_volume, products=api_products, pool_type=pool_type)
 
     STATUS_ICON = {'ok': '✅', 'low': '⬇️', 'high': '⬆️', 'none': '—'}
 
@@ -1800,11 +1836,12 @@ def calculator():
         products = [dict(r) for r in conn.execute(
             'SELECT * FROM products ORDER BY parameter, direction, name'
         ).fetchall()]
-    s = get_settings()
+    s         = get_settings()
+    pool_type = s.get('pool_type', 'brome')
     return render_template('calculator.html',
         products=products,
         pool_volume=float(s.get('pool_volume', 50000)),
-        ideal=IDEAL_RANGES,
+        ideal=get_ideal_ranges(pool_type),
         last=get_last_measurement(),
     )
 
